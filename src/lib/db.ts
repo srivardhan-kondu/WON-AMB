@@ -164,7 +164,10 @@ declare global {
 
 export function db(): Database.Database {
   if (globalThis.__wonDb) return globalThis.__wonDb;
-  const file = process.env.WON_DB_PATH || path.join(process.cwd(), "data", "won.db");
+  // Serverless hosts (Vercel) have a read-only filesystem except /tmp.
+  const file =
+    process.env.WON_DB_PATH ||
+    (process.env.VERCEL ? path.join("/tmp", "won.db") : path.join(process.cwd(), "data", "won.db"));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const d = new Database(file);
   d.pragma("journal_mode = WAL");
