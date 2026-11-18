@@ -6,7 +6,7 @@ import { audit, venueDefaults } from "@/lib/repo";
 
 export const GET = handle(async () => {
   await requireStaff("manager");
-  return json(venueDefaults());
+  return json(await venueDefaults());
 });
 
 const S = z.object({
@@ -24,13 +24,13 @@ export const PUT = handle(async (req: Request) => {
   const staff = await requireStaff("owner");
   const s = await body(req, S);
   const up = db().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
-  up.run("open_min", JSON.stringify(s.openMin));
-  up.run("close_min", JSON.stringify(s.closeMin));
-  up.run("holdback_pct", JSON.stringify(s.holdbackPct));
-  up.run("deep_clean_start", JSON.stringify(s.deepCleanStart));
-  up.run("deep_clean_min", JSON.stringify(s.deepCleanMin));
-  up.run("deep_clean_zone", JSON.stringify(s.deepCleanZone));
-  if (s.all5Mode) up.run("all5_mode", JSON.stringify(s.all5Mode));
-  audit(staff.email, "venue_defaults_updated", "settings", s);
-  return json(venueDefaults());
+  await up.run("open_min", JSON.stringify(s.openMin));
+  await up.run("close_min", JSON.stringify(s.closeMin));
+  await up.run("holdback_pct", JSON.stringify(s.holdbackPct));
+  await up.run("deep_clean_start", JSON.stringify(s.deepCleanStart));
+  await up.run("deep_clean_min", JSON.stringify(s.deepCleanMin));
+  await up.run("deep_clean_zone", JSON.stringify(s.deepCleanZone));
+  if (s.all5Mode) await up.run("all5_mode", JSON.stringify(s.all5Mode));
+  await audit(staff.email, "venue_defaults_updated", "settings", s);
+  return json(await venueDefaults());
 });

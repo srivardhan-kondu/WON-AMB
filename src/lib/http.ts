@@ -21,6 +21,8 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
     // Every API route is request-time (DB reads, cookies). Must run outside the try so Next's
     // prerender bail-out signal isn't swallowed by the error mapper below.
     await connection();
+    // Serverless clock: requests drive the scheduler (at most once a minute, after the response).
+    import("./scheduler").then((m) => m.maybeTick(), (e) => console.error("[won] scheduler load failed", e));
     try {
       return await fn(...args);
     } catch (e) {

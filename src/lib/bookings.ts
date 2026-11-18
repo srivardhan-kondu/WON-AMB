@@ -1,10 +1,11 @@
 // Booking service: quote → hold → commit, plus every state change after it.
-// Commits are serialized per day (an IMMEDIATE SQLite transaction; one writer process) and re-verify
-// every leg against a freshly rebuilt ledger, so double-booking cannot happen (§10).
+// Commits are serialized (a Postgres transaction holding the app-wide advisory lock, see db.ts) and
+// re-verify every leg against a freshly rebuilt ledger, so double-booking cannot happen (§10).
 
 import crypto from "node:crypto";
 import QRCode from "qrcode";
-import { db } from "./db";
+import { db, tx } from "./db";
+import { background } from "./background";
 import { falseSellouts, quote, stillFits, type Block, type Leg, type Offer, type Product, type QuoteRequest } from "./engine";
 import { HttpError } from "./http";
 import { baseUrl, sendMessage } from "./messenger";
@@ -29,23 +30,24 @@ export type PaymentMode = "online" | "cash" | "upi_counter" | "membership" | "co
 export type Source = "online" | "desk" | "phone";
 
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-function genCode(): string {
+async function genCode(): Promise<string> {
   const d = db();
   for (;;) {
     let c = "WON-";
     const bytes = crypto.randomBytes(4);
     for (const b of bytes) c += CODE_ALPHABET[b % CODE_ALPHABET.length];
-    if (!d.prepare("SELECT 1 FROM bookings WHERE code = ?").get(c)) return c;
+    if (!(await d.prepare("SELECT 1 FROM bookings WHERE code = ?").get(c))) return c;
   }
 }
 
-function fire(p: Promise<unknown>) {
-  p.catch((e) => console.error("[won] background task failed", e));
+/** Fire-and-forget (WhatsApp sends): runs after the response, outside any transaction. */
+function fire(task: () => Promise<unknown>) {
+  background(task);
 }
 
 /** Run the waitlist after the current transaction/request settles, never inside a commit. */
 function kickWaitlist() {
-  setTimeout(() => fire(processWaitlist()), 0);
+  background(processWaitlist);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -68,15 +70,17 @@ export interface QuoteInput {
   logRejection?: boolean;
 }
 
-export function quoteDay(input: QuoteInput) {
+export async function quoteDay(input: QuoteInput) {
   const { day: today, min } = nowIST();
   if (input.day < today) throw new HttpError(400, "That date has passed");
   if (input.day > addDays(today, BOOKING_HORIZON_DAYS)) throw new HttpError(400, `Bookings open ${BOOKING_HORIZON_DAYS} days ahead`);
-  sweep();
-  const product = getProduct(input.productId, input.day);
+  await sweep();
+  const [product, ledger] = await Promise.all([
+    getProduct(input.productId, input.day),
+    buildLedger(input.day, { excludeBookingId: input.excludeBookingId }),
+  ]);
   if (!product) throw new HttpError(404, "Unknown product");
   if (product.shape === "party" && input.channel === "online") throw new HttpError(400, "Parties are booked through our party desk — call or WhatsApp us");
-  const ledger = buildLedger(input.day, { excludeBookingId: input.excludeBookingId });
   const isToday = input.day === today;
   const req: QuoteRequest = {
     productId: input.productId,
@@ -92,25 +96,25 @@ export function quoteDay(input: QuoteInput) {
     limit: input.limit,
   };
   const result = quote(ledger, product, req);
-  applyFlash(input.day, product, input.party, result.offers, ledger.cfg.peakHours);
+  await applyFlash(input.day, product, input.party, result.offers, ledger.cfg.peakHours);
   if (input.logRejection && !result.error && result.offers.length === 0) {
     const bad = falseSellouts(ledger, product, req);
     if (bad > 0) console.error(`[won] FALSE SELL-OUT: ${product.id} x${input.party} on ${input.day} — ${bad} start(s) had capacity but no assignment`);
-    db().prepare("INSERT INTO quote_rejections (day, product_id, party, channel, false_sellout, at) VALUES (?, ?, ?, ?, ?, ?)").run(input.day, product.id, input.party, input.channel, bad > 0 ? 1 : 0, Date.now());
+    await db().prepare("INSERT INTO quote_rejections (day, product_id, party, channel, false_sellout, at) VALUES (?, ?, ?, ?, ?, ?)").run(input.day, product.id, input.party, input.channel, bad > 0 ? 1 : 0, Date.now());
   }
   return { product, ledger, result };
 }
 
 /** §8.4 Upsell from real availability: could this same start seat them for 3 games or All 5? */
-export function upsellsFor(day: string, product: Product, party: number, start: number, channel: "online" | "desk") {
+export async function upsellsFor(day: string, product: Product, party: number, start: number, channel: "online" | "desk") {
   const out: { productId: string; name: string; start: number; extraPaise: number }[] = [];
   const tries = product.id === "c1" ? ["c3", "a5"] : product.id === "c3" ? ["a5", "combo"] : [];
   for (const pid of tries) {
-    const p = getProduct(pid);
+    const p = await getProduct(pid);
     if (!p || !p.active || party > p.maxParty || party < p.minParty) continue;
     const at = p.shape === "rotation" ? Math.floor(start / 60) * 60 : start;
     try {
-      const { result } = quoteDay({ day, productId: pid, party, channel, exactStart: p.shape === "combo" ? null : at, windowStart: p.shape === "combo" ? start - 20 : null, windowEnd: p.shape === "combo" ? start + 21 : null, limit: 1 });
+      const { result } = await quoteDay({ day, productId: pid, party, channel, exactStart: p.shape === "combo" ? null : at, windowStart: p.shape === "combo" ? start - 20 : null, windowEnd: p.shape === "combo" ? start + 21 : null, limit: 1 });
       const o = result.offers[0];
       if (o) out.push({ productId: pid, name: p.name, start: o.start, extraPaise: o.pricePaise - product.pricePaise * party });
     } catch {
@@ -125,7 +129,7 @@ export function upsellsFor(day: string, product: Product, party: number, start: 
 // ---------------------------------------------------------------------------------------------
 
 let lastSweep = 0;
-export function sweep(force = false) {
+export async function sweep(force = false) {
   const t = Date.now();
   if (!force && t - lastSweep < 2000) return;
   lastSweep = t;
@@ -133,24 +137,23 @@ export function sweep(force = false) {
   const { day: today, min } = nowIST();
   const released: { day: string; start_min: number }[] = [];
 
-  const expired = d.prepare("SELECT id, day, start_min FROM bookings WHERE status = 'hold' AND hold_expires < ?").all(t) as { id: number; day: string; start_min: number }[];
-  if (expired.length) {
-    const upd = d.prepare("UPDATE bookings SET status = 'expired' WHERE id = ? AND status = 'hold'");
-    for (const e of expired) upd.run(e.id);
-    released.push(...expired);
-  }
+  // Each transition is a single conditional UPDATE … RETURNING, so two instances sweeping at once
+  // can't both claim (and audit) the same booking.
+  const expired = (await d
+    .prepare("UPDATE bookings SET status = 'expired' WHERE status = 'hold' AND hold_expires < ? RETURNING id, day, start_min")
+    .run<{ id: number; day: string; start_min: number }>(t)).rows;
+  released.push(...expired);
 
-  const noShows = d
-    .prepare("SELECT id, code, day, start_min FROM bookings WHERE status = 'confirmed' AND (day < ? OR (day = ? AND start_min + ? < ?))")
-    .all(today, today, NO_SHOW_GRACE_MIN, min) as { id: number; code: string; day: string; start_min: number }[];
+  const noShows = (await d
+    .prepare("UPDATE bookings SET status = 'no_show' WHERE status = 'confirmed' AND (day < ? OR (day = ? AND start_min + ? < ?)) RETURNING id, code, day, start_min")
+    .run<{ id: number; code: string; day: string; start_min: number }>(today, today, NO_SHOW_GRACE_MIN, min)).rows;
   for (const n of noShows) {
-    d.prepare("UPDATE bookings SET status = 'no_show' WHERE id = ?").run(n.id);
-    audit("system", "auto_no_show", n.code, { graceMin: NO_SHOW_GRACE_MIN });
+    await audit("system", "auto_no_show", n.code, { graceMin: NO_SHOW_GRACE_MIN });
     released.push(n);
   }
-  d.prepare("UPDATE bookings SET status = 'done' WHERE status = 'arrived' AND (day < ? OR (day = ? AND end_min < ?))").run(today, today, min);
-  d.prepare("UPDATE waitlist SET state = 'expired' WHERE state = 'offered' AND offer_expires < ?").run(t);
-  d.prepare("UPDATE waitlist SET state = 'expired' WHERE state = 'waiting' AND (day < ? OR (day = ? AND hour * 60 + 60 <= ?))").run(today, today, min);
+  await d.prepare("UPDATE bookings SET status = 'done' WHERE status = 'arrived' AND (day < ? OR (day = ? AND end_min < ?))").run(today, today, min);
+  await d.prepare("UPDATE waitlist SET state = 'expired' WHERE state = 'offered' AND offer_expires < ?").run(t);
+  await d.prepare("UPDATE waitlist SET state = 'expired' WHERE state = 'waiting' AND (day < ? OR (day = ? AND hour * 60 + 60 <= ?))").run(today, today, min);
 
   const days = new Set(released.map((r) => r.day));
   for (const day of days) emitChange(day);
@@ -190,9 +193,9 @@ export interface HoldResult {
   token: string;
 }
 
-function alternatives(day: string, productId: string, party: number, around: number, channel: "online" | "desk") {
+async function alternatives(day: string, productId: string, party: number, around: number, channel: "online" | "desk") {
   try {
-    return quoteDay({ day, productId, party, channel, preferredMin: around, limit: 3 }).result.offers.map((o) => ({ start: o.start, end: o.end }));
+    return (await quoteDay({ day, productId, party, channel, preferredMin: around, limit: 3 })).result.offers.map((o) => ({ start: o.start, end: o.end }));
   } catch {
     return [];
   }
@@ -201,12 +204,12 @@ function alternatives(day: string, productId: string, party: number, around: num
 export async function createHold(input: HoldInput): Promise<HoldResult> {
   const d = db();
   if (input.idemKey) {
-    const existing = d.prepare("SELECT code FROM bookings WHERE idem_key = ?").get(input.idemKey) as { code: string } | undefined;
+    const existing = await d.prepare("SELECT code FROM bookings WHERE idem_key = ?").get<{ code: string }>(input.idemKey);
     if (existing) return holdResultFor(existing.code);
   }
-  assertWritable();
+  await assertWritable();
   const channel = input.source === "online" ? "online" : "desk";
-  const product = getProduct(input.productId, input.day);
+  const product = await getProduct(input.productId, input.day);
   if (!product) throw new HttpError(404, "Unknown product");
 
   if (product.shape === "party") {
@@ -214,83 +217,103 @@ export async function createHold(input: HoldInput): Promise<HoldResult> {
     if (lead < PARTY_LEAD_MS && !input.overridePartyLead) throw new HttpError(400, "Parties need at least 48 h notice (manager override available)");
   }
   if (input.payment === "membership") {
-    validateMembership(input.membershipId ?? null, input.phone, input.day);
-    checkMemberHorizon(input.day, input.start);
+    await validateMembership(input.membershipId ?? null, input.phone, input.day);
+    await checkMemberHorizon(input.day, input.start);
   }
 
-  const customerId = upsertCustomer(input.phone, input.name);
+  const customerId = await upsertCustomer(input.phone, input.name);
   const isOnlinePay = input.payment === "online";
   const ttl = product.shape === "party" ? PARTY_HOLD_TTL_MS : HOLD_TTL_MS;
 
-  const commit = d.transaction((): { code: string; offer: Offer; due: number } => {
+  const commit = async (): Promise<{ code: string; offer: Offer; due: number }> => {
+    // Idempotency re-checked under the lock: a retried request racing the original must not book twice.
+    if (input.idemKey) {
+      const again = await d.prepare("SELECT code FROM bookings WHERE idem_key = ?").get<{ code: string }>(input.idemKey);
+      if (again) throw new IdemHit(again.code);
+    }
     // Re-quote at the exact start under the lock — never trust client-supplied legs.
-    const { result } = quoteDay({ day: input.day, productId: input.productId, party: input.party, chosenRooms: input.chosenRooms, channel, exactStart: input.start, limit: 1 });
+    const { result } = await quoteDay({ day: input.day, productId: input.productId, party: input.party, chosenRooms: input.chosenRooms, channel, exactStart: input.start, limit: 1 });
     if (result.error) throw new HttpError(400, result.error);
     const offer = result.offers[0];
     if (!offer) {
-      throw new HttpError(409, "Sorry — that slot was just taken.", { alternatives: alternatives(input.day, input.productId, input.party, input.start, channel) });
+      throw new HttpError(409, "Sorry — that slot was just taken.", { alternatives: await alternatives(input.day, input.productId, input.party, input.start, channel) });
     }
-    const code = genCode();
+    const code = await genCode();
     const price = input.payment === "membership" || input.payment === "comp" ? 0 : offer.pricePaise;
     const deposit = product.shape === "party" ? Math.round(price * 0.25) : 0;
     const due = product.shape === "party" ? deposit : price;
     const status = isOnlinePay && due > 0 ? "hold" : "confirmed";
     const guests = (input.guestNames ?? []).filter(Boolean).map((name) => ({ name }));
-    const info = d
+    const info = await d
       .prepare(
         `INSERT INTO bookings (code, product_id, customer_id, day, start_min, end_min, party_size, guest_list, status, source, price_paise, deposit_paise, paid_paise, payment_method, idem_key, hold_expires, food, notes, membership_id, created_at)
-         VALUES (@code, @product_id, @customer_id, @day, @start, @end, @party, @guests, @status, @source, @price, @deposit, @paid, @method, @idem, @expires, @food, @notes, @membership, @created)`,
+         VALUES (@code, @product_id, @customer_id, @day, @start, @end, @party, @guests, @status, @source, @price, @deposit, @paid, @method, @idem, @expires, @food, @notes, @membership, @created)
+         RETURNING id`,
       )
-      .run({
+      .run<{ id: number }>({
         code, product_id: product.id, customer_id: customerId, day: input.day, start: offer.start, end: offer.end, party: input.party,
         guests: JSON.stringify(guests), status, source: input.source, price, deposit,
         paid: status === "confirmed" && !isOnlinePay ? due : 0,
         method: input.payment, idem: input.idemKey ?? null, expires: status === "hold" ? Date.now() + ttl : null,
         food: input.food ? 1 : 0, notes: input.notes ?? "", membership: input.payment === "membership" ? input.membershipId ?? null : null, created: Date.now(),
       });
-    const id = Number(info.lastInsertRowid);
-    insertLegs(id, input.day, offer.legs, offer.blocks ?? []);
-    audit(input.actor, status === "hold" ? "hold_created" : "booking_created", code, { product: product.id, party: input.party, start: offer.start, payment: input.payment, source: input.source });
+    const id = info.rows[0].id;
+    await insertLegs(id, input.day, offer.legs, offer.blocks ?? []);
+    await audit(input.actor, status === "hold" ? "hold_created" : "booking_created", code, { product: product.id, party: input.party, start: offer.start, payment: input.payment, source: input.source });
     return { code, offer, due };
-  });
+  };
 
-  const { code, due } = commit.immediate();
-  const booking = getBookingByCode(code)!;
+  let committed: { code: string; due: number };
+  try {
+    committed = await tx(commit);
+  } catch (e) {
+    if (e instanceof IdemHit) return holdResultFor(e.code);
+    throw e;
+  }
+  const { code, due } = committed;
+  const booking = (await getBookingByCode(code))!;
   emitChange(input.day);
 
   if (booking.status === "hold") {
     try {
       const pp = payments();
       const { orderId } = await pp.createOrder(due, code);
-      d.prepare("INSERT INTO payments (booking_id, provider, provider_order_id, amount_paise, status, kind, created_at) VALUES (?, ?, ?, ?, 'created', ?, ?)").run(
+      await d.prepare("INSERT INTO payments (booking_id, provider, provider_order_id, amount_paise, status, kind, created_at) VALUES (?, ?, ?, ?, 'created', ?, ?)").run(
         booking.id, pp.name, orderId, due, product.shape === "party" ? "deposit" : "booking", Date.now(),
       );
     } catch (e) {
-      d.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
+      await d.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(booking.id);
       emitChange(input.day);
       console.error(e);
       throw new HttpError(502, "Payment gateway unavailable — please try again");
     }
   } else {
-    afterConfirm(booking.id);
+    await afterConfirm(booking.id);
   }
   return holdResultFor(code);
 }
 
-function insertLegs(bookingId: number, day: string, legs: Leg[], blocks: Block[]) {
-  const d = db();
-  const ins = d.prepare("INSERT INTO booking_legs (booking_id, leg_no, room_id, day, start_min, end_min) VALUES (?, ?, ?, ?, ?, ?)");
-  legs.forEach((l, i) => ins.run(bookingId, i, l.roomId, day, l.start, l.end));
-  const insB = d.prepare("INSERT INTO calendar_blocks (room_id, day, start_min, end_min, reason, booking_id) VALUES (?, ?, ?, ?, ?, ?)");
-  for (const b of blocks) insB.run(b.roomId, day, b.start, b.end, b.reason, bookingId);
+/** Thrown inside the commit when the idempotency key was used meanwhile; rolls back, returns the original. */
+class IdemHit extends Error {
+  constructor(public code: string) {
+    super("idempotent replay");
+  }
 }
 
-export function holdResultFor(code: string): HoldResult {
-  const b = getBookingByCode(code);
+async function insertLegs(bookingId: number, day: string, legs: Leg[], blocks: Block[]) {
+  const d = db();
+  const ins = d.prepare("INSERT INTO booking_legs (booking_id, leg_no, room_id, day, start_min, end_min) VALUES (?, ?, ?, ?, ?, ?)");
+  for (const [i, l] of legs.entries()) await ins.run(bookingId, i, l.roomId, day, l.start, l.end);
+  const insB = d.prepare("INSERT INTO calendar_blocks (room_id, day, start_min, end_min, reason, booking_id) VALUES (?, ?, ?, ?, ?, ?)");
+  for (const b of blocks) await insB.run(b.roomId, day, b.start, b.end, b.reason, bookingId);
+}
+
+export async function holdResultFor(code: string): Promise<HoldResult> {
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
-  const p = db().prepare("SELECT * FROM payments WHERE booking_id = ? ORDER BY id DESC LIMIT 1").get(b.id) as
-    | { provider: string; provider_order_id: string; amount_paise: number; status: string }
-    | undefined;
+  const p = await db()
+    .prepare("SELECT * FROM payments WHERE booking_id = ? ORDER BY id DESC LIMIT 1")
+    .get<{ provider: string; provider_order_id: string; amount_paise: number; status: string }>(b.id);
   const due = b.status === "hold" ? (p?.amount_paise ?? 0) : 0;
   return {
     code: b.code,
@@ -309,55 +332,62 @@ export function holdResultFor(code: string): HoldResult {
  */
 export async function handlePaymentCaptured(orderId: string, paymentId: string, amountPaise: number | null, raw: unknown) {
   const d = db();
-  const pay = d.prepare("SELECT * FROM payments WHERE provider_order_id = ?").get(orderId) as
-    | { id: number; booking_id: number; status: string; amount_paise: number; provider_payment_id: string | null; kind: string }
-    | undefined;
+  const pay = await d
+    .prepare("SELECT * FROM payments WHERE provider_order_id = ?")
+    .get<{ id: number; booking_id: number; status: string; amount_paise: number; provider_payment_id: string | null; kind: string }>(orderId);
   if (!pay) return { ok: false, reason: "unknown order" };
   if (pay.status === "captured" || pay.status === "refunded") return { ok: true, deduped: true };
-  if (d.prepare("SELECT 1 FROM payments WHERE provider_payment_id = ?").get(paymentId)) return { ok: true, deduped: true };
+  if (await d.prepare("SELECT 1 FROM payments WHERE provider_payment_id = ?").get(paymentId)) return { ok: true, deduped: true };
 
   const amount = amountPaise ?? pay.amount_paise;
-  d.prepare("UPDATE payments SET status = 'captured', provider_payment_id = ?, raw = ? WHERE id = ?").run(paymentId, JSON.stringify(raw ?? {}), pay.id);
 
-  const outcome = d
-    .transaction((): "confirmed" | "already" | "refund" => {
-      const b = d.prepare("SELECT * FROM bookings WHERE id = ?").get(pay.booking_id) as BookingRow;
-      if (["confirmed", "arrived", "done"].includes(b.status)) {
-        d.prepare("UPDATE bookings SET paid_paise = paid_paise + ? WHERE id = ?").run(amount, b.id);
-        return "already";
+  // Webhook + checkout fallback can arrive together: the capture is claimed under the lock, once.
+  const outcome = await tx(async (): Promise<"confirmed" | "already" | "refund" | "deduped"> => {
+    const claimed = await d
+      .prepare("UPDATE payments SET status = 'captured', provider_payment_id = ?, raw = ? WHERE id = ? AND status NOT IN ('captured','refunded')")
+      .run(paymentId, JSON.stringify(raw ?? {}), pay.id);
+    if (!claimed.changes) return "deduped";
+    const b = (await d.prepare("SELECT * FROM bookings WHERE id = ?").get<BookingRow>(pay.booking_id))!;
+    if (["confirmed", "arrived", "done"].includes(b.status)) {
+      await d.prepare("UPDATE bookings SET paid_paise = paid_paise + ? WHERE id = ?").run(amount, b.id);
+      return "already";
+    }
+    const live = b.status === "hold" && (b.hold_expires ?? 0) >= Date.now();
+    if (!live) {
+      // Late payment (slow UPI): retry the commit against the current ledger.
+      const [product, ledger, legRows, blockRows] = await Promise.all([
+        getProduct(b.product_id),
+        buildLedger(b.day, { excludeBookingId: b.id }),
+        getLegs(b.id),
+        d.prepare("SELECT room_id, start_min, end_min, reason FROM calendar_blocks WHERE booking_id = ?").all<{ room_id: string; start_min: number; end_min: number; reason: string }>(b.id),
+      ]);
+      const legs = legRows.map((l) => ({ roomId: l.room_id, start: l.start_min, end: l.end_min }));
+      const blocks = blockRows.map((x) => ({ roomId: x.room_id, start: x.start_min, end: x.end_min, reason: x.reason }));
+      if (!stillFits(ledger, product!, b.party_size, legs, blocks)) {
+        await d.prepare("UPDATE bookings SET status = 'cancelled', notes = notes || ' [auto-refunded: seats gone after late payment]' WHERE id = ?").run(b.id);
+        return "refund";
       }
-      const live = b.status === "hold" && (b.hold_expires ?? 0) >= Date.now();
-      if (!live) {
-        // Late payment (slow UPI): retry the commit against the current ledger.
-        const product = getProduct(b.product_id)!;
-        const ledger = buildLedger(b.day, { excludeBookingId: b.id });
-        const legs = getLegs(b.id).map((l) => ({ roomId: l.room_id, start: l.start_min, end: l.end_min }));
-        const blocks = (d.prepare("SELECT room_id, start_min, end_min, reason FROM calendar_blocks WHERE booking_id = ?").all(b.id) as { room_id: string; start_min: number; end_min: number; reason: string }[]).map(
-          (x) => ({ roomId: x.room_id, start: x.start_min, end: x.end_min, reason: x.reason }),
-        );
-        if (!stillFits(ledger, product, b.party_size, legs, blocks)) {
-          d.prepare("UPDATE bookings SET status = 'cancelled', notes = notes || ' [auto-refunded: seats gone after late payment]' WHERE id = ?").run(b.id);
-          return "refund";
-        }
-      }
-      d.prepare("UPDATE bookings SET status = 'confirmed', hold_expires = NULL, paid_paise = paid_paise + ? WHERE id = ?").run(amount, b.id);
-      return "confirmed";
-    })
-    .immediate();
+    }
+    await d.prepare("UPDATE bookings SET status = 'confirmed', hold_expires = NULL, paid_paise = paid_paise + ? WHERE id = ?").run(amount, b.id);
+    return "confirmed";
+  });
+  if (outcome === "deduped") return { ok: true, deduped: true };
 
-  const b = d.prepare("SELECT * FROM bookings WHERE id = ?").get(pay.booking_id) as BookingRow;
+  const b = (await d.prepare("SELECT * FROM bookings WHERE id = ?").get<BookingRow>(pay.booking_id))!;
   if (outcome === "refund") {
     try {
       const { refundId } = await payments().refund(paymentId, amount);
-      d.prepare("UPDATE payments SET status = 'refunded', raw = json_set(COALESCE(raw,'{}'), '$.refund_id', ?) WHERE id = ?").run(refundId, pay.id);
+      await d
+        .prepare("UPDATE payments SET status = 'refunded', raw = (COALESCE(raw, '{}')::jsonb || jsonb_build_object('refund_id', ?::text))::text WHERE id = ?")
+        .run(refundId, pay.id);
     } catch (e) {
-      audit("system", "refund_failed", b.code, { error: String(e) });
+      await audit("system", "refund_failed", b.code, { error: String(e) });
     }
-    audit("system", "late_payment_refunded", b.code, { paymentId, amount });
-    const cust = customerOf(b);
+    await audit("system", "late_payment_refunded", b.code, { paymentId, amount });
+    const cust = await customerOf(b);
     if (cust) {
-      const alts = alternatives(b.day, b.product_id, b.party_size, b.start_min, "online");
-      fire(sendMessage(cust.phone, "booking_apology", {
+      const alts = await alternatives(b.day, b.product_id, b.party_size, b.start_min, "online");
+      fire(() => sendMessage(cust.phone, "booking_apology", {
         name: cust.name || "there",
         code: b.code,
         alternatives: alts.map((a) => fmtMin(a.start)).join(", ") || "none today",
@@ -367,38 +397,39 @@ export async function handlePaymentCaptured(orderId: string, paymentId: string, 
     emitChange(b.day);
     return { ok: true, refunded: true, code: b.code };
   }
-  if (outcome === "confirmed") afterConfirm(b.id);
+  if (outcome === "confirmed") await afterConfirm(b.id);
   return { ok: true, code: b.code };
 }
 
-export function handlePaymentFailed(orderId: string) {
+export async function handlePaymentFailed(orderId: string) {
   const d = db();
-  const pay = d.prepare("SELECT booking_id FROM payments WHERE provider_order_id = ?").get(orderId) as { booking_id: number } | undefined;
+  const pay = await d.prepare("SELECT booking_id FROM payments WHERE provider_order_id = ?").get<{ booking_id: number }>(orderId);
   if (!pay) return;
-  d.prepare("UPDATE payments SET status = 'failed' WHERE provider_order_id = ? AND status = 'created'").run(orderId);
-  const b = d.prepare("SELECT code, day, status FROM bookings WHERE id = ?").get(pay.booking_id) as { code: string; day: string; status: string };
-  if (b.status === "hold") {
-    d.prepare("UPDATE bookings SET status = 'expired' WHERE id = ?").run(pay.booking_id);
-    audit("system", "hold_released_payment_failed", b.code);
+  await d.prepare("UPDATE payments SET status = 'failed' WHERE provider_order_id = ? AND status = 'created'").run(orderId);
+  const released = await d
+    .prepare("UPDATE bookings SET status = 'expired' WHERE id = ? AND status = 'hold' RETURNING code, day")
+    .run<{ code: string; day: string }>(pay.booking_id);
+  const b = released.rows[0];
+  if (b) {
+    await audit("system", "hold_released_payment_failed", b.code);
     emitChange(b.day);
     kickWaitlist();
   }
 }
 
-function customerOf(b: BookingRow) {
-  return b.customer_id ? (db().prepare("SELECT * FROM customers WHERE id = ?").get(b.customer_id) as { id: number; phone: string; name: string }) : null;
+async function customerOf(b: BookingRow) {
+  return b.customer_id ? ((await db().prepare("SELECT * FROM customers WHERE id = ?").get<{ id: number; phone: string; name: string }>(b.customer_id)) ?? null) : null;
 }
 
-function afterConfirm(bookingId: number) {
+async function afterConfirm(bookingId: number) {
   const d = db();
-  const b = d.prepare("SELECT * FROM bookings WHERE id = ?").get(bookingId) as BookingRow;
-  ensureInvoice(b);
-  const p = getProduct(b.product_id)!;
-  const cust = customerOf(b);
-  audit("system", "booking_confirmed", b.code, { paid: b.paid_paise });
+  const b = (await d.prepare("SELECT * FROM bookings WHERE id = ?").get<BookingRow>(bookingId))!;
+  await ensureInvoice(b);
+  const [p, cust] = await Promise.all([getProduct(b.product_id), customerOf(b)]);
+  await audit("system", "booking_confirmed", b.code, { paid: b.paid_paise });
   emitChange(b.day);
-  if (cust) {
-    fire(sendMessage(cust.phone, "booking_confirmed", {
+  if (cust && p) {
+    fire(() => sendMessage(cust.phone, "booking_confirmed", {
       name: cust.name || "there",
       product: p.name,
       when: `${fmtDay(b.day)}, ${fmtMin(b.start_min)}`,
@@ -418,20 +449,21 @@ function financialYear(at: number) {
   return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
 }
 
-function ensureInvoice(b: BookingRow) {
+async function ensureInvoice(b: BookingRow) {
   const d = db();
-  if (d.prepare("SELECT 1 FROM invoices WHERE booking_id = ?").get(b.id)) return;
   if (b.price_paise <= 0) return;
   const fy = financialYear(Date.now());
-  d.transaction(() => {
-    const seq = ((d.prepare("SELECT MAX(seq) AS s FROM invoices WHERE fy = ?").get(fy) as { s: number | null }).s ?? 0) + 1;
+  // Sequential GST numbers: allocated under the lock, and re-checked there so a booking gets one invoice.
+  await tx(async () => {
+    if (await d.prepare("SELECT 1 FROM invoices WHERE booking_id = ?").get(b.id)) return;
+    const seq = ((await d.prepare("SELECT MAX(seq) AS s FROM invoices WHERE fy = ?").get<{ s: number | null }>(fy))!.s ?? 0) + 1;
     const taxable = Math.round(b.price_paise / 1.18);
     const gst = b.price_paise - taxable;
     const detail = { total: b.price_paise, taxable, cgst: Math.floor(gst / 2), sgst: gst - Math.floor(gst / 2), rate: 18, inclusive: true };
-    d.prepare("INSERT INTO invoices (booking_id, number, fy, seq, gst_detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+    await d.prepare("INSERT INTO invoices (booking_id, number, fy, seq, gst_detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
       b.id, `WON/${fy}/${String(seq).padStart(5, "0")}`, fy, seq, JSON.stringify(detail), Date.now(),
     );
-  }).immediate();
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -446,96 +478,101 @@ export function parseScan(input: string): string {
   return m[0].toUpperCase();
 }
 
-export function waiverCount(bookingId: number): number {
-  return (db().prepare("SELECT COUNT(*) AS n FROM waivers WHERE booking_id = ?").get(bookingId) as { n: number }).n;
+export async function waiverCount(bookingId: number): Promise<number> {
+  return (await db().prepare("SELECT COUNT(*) AS n FROM waivers WHERE booking_id = ?").get<{ n: number }>(bookingId))!.n;
 }
 
-export function checkIn(scan: string, actor: string, opts: { shrinkTo?: number | null } = {}) {
-  sweep(true);
+export async function checkIn(scan: string, actor: string, opts: { shrinkTo?: number | null } = {}) {
+  await sweep(true);
   const d = db();
-  const b = getBookingByCode(parseScan(scan));
+  const b = await getBookingByCode(parseScan(scan));
   if (!b) throw new HttpError(404, "Booking not found");
   const { day: today } = nowIST();
   if (b.status === "arrived") throw new HttpError(409, "Already checked in");
   if (b.day !== today) throw new HttpError(409, `This booking is for ${fmtDay(b.day)}`);
   if (b.status === "no_show") {
     // Late arrival after the auto no-show: allowed only if their seats were not resold.
-    const product = getProduct(b.product_id)!;
-    const ledger = buildLedger(b.day, { excludeBookingId: b.id });
+    const product = (await getProduct(b.product_id))!;
+    const ledger = await buildLedger(b.day, { excludeBookingId: b.id });
     const { min } = nowIST();
-    const legs = getLegs(b.id).map((l) => ({ roomId: l.room_id, start: l.start_min, end: l.end_min })).filter((l) => l.end > min);
+    const legs = (await getLegs(b.id)).map((l) => ({ roomId: l.room_id, start: l.start_min, end: l.end_min })).filter((l) => l.end > min);
     if (legs.length === 0 || !stillFits(ledger, product, b.party_size, legs)) throw new HttpError(409, "Marked no-show and the slot has been resold — offer a new slot via walk-in");
   } else if (b.status !== "confirmed") throw new HttpError(409, `Booking is ${b.status.replace("_", "-")}`);
-  const signed = waiverCount(b.id);
+  const signed = await waiverCount(b.id);
   let party = b.party_size;
   if (signed < party) {
     if (!opts.shrinkTo) throw new HttpError(409, "Waivers missing", { needWaivers: true, signed, party });
     if (opts.shrinkTo < 1 || opts.shrinkTo > signed) throw new HttpError(400, `Can check in at most ${signed} guest(s) with signed waivers`);
     party = opts.shrinkTo;
   }
-  d.transaction(() => {
-    if (party !== b.party_size) {
-      d.prepare("UPDATE bookings SET party_size = ? WHERE id = ?").run(party, b.id);
-      audit(actor, "party_shrunk_at_checkin", b.code, { from: b.party_size, to: party, reason: "unsigned waivers" });
-    }
-    d.prepare("UPDATE bookings SET status = 'arrived', arrived_at = ? WHERE id = ?").run(Date.now(), b.id);
-    if (b.membership_id) burnMembershipVisit(b.membership_id, b.id);
-    audit(actor, "checked_in", b.code, { party });
-  }).immediate();
+  await tx(async () => {
+    // Claim the check-in: a double scan at two counters must not burn two membership visits.
+    const claimed = await d
+      .prepare("UPDATE bookings SET status = 'arrived', arrived_at = ?, party_size = ? WHERE id = ? AND status = ?")
+      .run(Date.now(), party, b.id, b.status);
+    if (!claimed.changes) throw new HttpError(409, "Already checked in");
+    if (party !== b.party_size) await audit(actor, "party_shrunk_at_checkin", b.code, { from: b.party_size, to: party, reason: "unsigned waivers" });
+    if (b.membership_id) await burnMembershipVisit(b.membership_id, b.id);
+    await audit(actor, "checked_in", b.code, { party });
+  });
   emitChange(b.day);
   if (party !== b.party_size) kickWaitlist();
   return { code: b.code, party };
 }
 
-export function markNoShow(code: string, actor: string, reason: string) {
-  const b = getBookingByCode(code);
+export async function markNoShow(code: string, actor: string, reason: string) {
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   if (b.status !== "confirmed") throw new HttpError(409, `Booking is ${b.status}`);
-  db().prepare("UPDATE bookings SET status = 'no_show' WHERE id = ?").run(b.id);
-  audit(actor, "manual_no_show", b.code, { reason });
+  await db().prepare("UPDATE bookings SET status = 'no_show' WHERE id = ?").run(b.id);
+  await audit(actor, "manual_no_show", b.code, { reason });
   emitChange(b.day);
   kickWaitlist();
 }
 
-export function cancelBooking(code: string, actor: string, reason: string) {
-  const b = getBookingByCode(code);
+export async function cancelBooking(code: string, actor: string, reason: string) {
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   if (!["hold", "confirmed"].includes(b.status)) throw new HttpError(409, `Booking is ${b.status}`);
-  db().prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(b.id);
-  audit(actor, "cancelled_override", b.code, { reason, paid: b.paid_paise, note: "No refund per policy unless owner-approved" });
+  await db().prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(b.id);
+  await audit(actor, "cancelled_override", b.code, { reason, paid: b.paid_paise, note: "No refund per policy unless owner-approved" });
   emitChange(b.day);
   kickWaitlist();
 }
 
-export function reschedule(code: string, newDay: string, newStart: number, actor: string, opts: { override: boolean; reason?: string }) {
+export async function reschedule(code: string, newDay: string, newStart: number, actor: string, opts: { override: boolean; reason?: string }) {
   const d = db();
-  const b = getBookingByCode(code);
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   if (b.status !== "confirmed") throw new HttpError(409, `Only confirmed bookings can be moved (this one is ${b.status})`);
-  assertWritable();
+  await assertWritable();
   if (!opts.override) {
     if (b.reschedule_count >= 1) throw new HttpError(403, "The one free reschedule has been used — please contact the desk");
     if (istToEpoch(b.day, b.start_min) - Date.now() < 24 * 60 * 60_000) throw new HttpError(403, "Free reschedules close 24 h before your slot");
   }
-  const product = getProduct(b.product_id)!;
+  const product = (await getProduct(b.product_id))!;
   const oldDay = b.day;
-  d.transaction(() => {
-    const { result } = quoteDay({ day: newDay, productId: b.product_id, party: b.party_size, channel: "desk", exactStart: newStart, excludeBookingId: b.id, limit: 1 });
+  await tx(async () => {
+    // Re-read under the lock: a concurrent move must not use the one free reschedule twice.
+    const cur = (await d.prepare("SELECT status, reschedule_count FROM bookings WHERE id = ?").get<{ status: string; reschedule_count: number }>(b.id))!;
+    if (cur.status !== "confirmed") throw new HttpError(409, `Only confirmed bookings can be moved (this one is ${cur.status})`);
+    if (!opts.override && cur.reschedule_count >= 1) throw new HttpError(403, "The one free reschedule has been used — please contact the desk");
+    const { result } = await quoteDay({ day: newDay, productId: b.product_id, party: b.party_size, channel: "desk", exactStart: newStart, excludeBookingId: b.id, limit: 1 });
     const offer = result.offers[0];
     if (!offer) throw new HttpError(409, "That slot isn't available");
     if (offer.pricePaise > b.price_paise && !opts.override && b.price_paise > 0) throw new HttpError(409, "Reschedules are limited to equal-value slots");
-    d.prepare("DELETE FROM booking_legs WHERE booking_id = ?").run(b.id);
-    d.prepare("DELETE FROM calendar_blocks WHERE booking_id = ?").run(b.id);
-    insertLegs(b.id, newDay, offer.legs, offer.blocks ?? []);
-    d.prepare("UPDATE bookings SET day = ?, start_min = ?, end_min = ?, reschedule_count = reschedule_count + 1 WHERE id = ?").run(newDay, offer.start, offer.end, b.id);
-    audit(actor, opts.override ? "reschedule_override" : "rescheduled", b.code, { from: { day: oldDay, start: b.start_min }, to: { day: newDay, start: offer.start }, reason: opts.reason ?? null, product: product.id });
-  }).immediate();
+    await d.prepare("DELETE FROM booking_legs WHERE booking_id = ?").run(b.id);
+    await d.prepare("DELETE FROM calendar_blocks WHERE booking_id = ?").run(b.id);
+    await insertLegs(b.id, newDay, offer.legs, offer.blocks ?? []);
+    await d.prepare("UPDATE bookings SET day = ?, start_min = ?, end_min = ?, reschedule_count = reschedule_count + 1 WHERE id = ?").run(newDay, offer.start, offer.end, b.id);
+    await audit(actor, opts.override ? "reschedule_override" : "rescheduled", b.code, { from: { day: oldDay, start: b.start_min }, to: { day: newDay, start: offer.start }, reason: opts.reason ?? null, product: product.id });
+  });
   emitChange(oldDay);
   emitChange(newDay);
   kickWaitlist();
-  const cust = customerOf(b);
+  const cust = await customerOf(b);
   if (cust) {
-    fire(sendMessage(cust.phone, "booking_confirmed", {
+    fire(() => sendMessage(cust.phone, "booking_confirmed", {
       name: cust.name || "there", product: product.name, when: `${fmtDay(newDay)}, ${fmtMin(newStart)}`, code: b.code,
       link: `${baseUrl()}/b/${b.code}?t=${bookingToken(b.code)}`, waivers: `${baseUrl()}/w/${b.code}?t=${bookingToken(b.code)}`, directions: "Level 6, AMB Mall",
     }));
@@ -557,14 +594,14 @@ export function guestList(b: BookingRow): Guest[] {
   }
 }
 
-export function updateGuests(code: string, guests: Guest[], actor: string) {
-  const b = getBookingByCode(code);
+export async function updateGuests(code: string, guests: Guest[], actor: string) {
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   if (!["hold", "confirmed"].includes(b.status)) throw new HttpError(409, b.status === "arrived" ? "The guest list is locked after check-in" : `Booking is ${b.status}`);
   const clean = guests.map((g) => ({ name: g.name.trim(), ...(g.ageBand ? { ageBand: g.ageBand } : {}) })).filter((g) => g.name);
   if (clean.length > b.party_size) throw new HttpError(400, `This booking is for ${b.party_size} guest(s) — the party size itself is changed at the desk`);
-  db().prepare("UPDATE bookings SET guest_list = ? WHERE id = ?").run(JSON.stringify(clean), b.id);
-  audit(actor, "guest_list_updated", b.code, { count: clean.length });
+  await db().prepare("UPDATE bookings SET guest_list = ? WHERE id = ?").run(JSON.stringify(clean), b.id);
+  await audit(actor, "guest_list_updated", b.code, { count: clean.length });
   emitChange(b.day);
   return clean;
 }
@@ -576,30 +613,30 @@ export function updateGuests(code: string, guests: Guest[], actor: string) {
 
 export async function refundBooking(code: string, amountPaise: number, actor: string, approver: string, reason: string, opts: { cancel: boolean }) {
   const d = db();
-  const b = getBookingByCode(code);
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   const refundable = b.paid_paise - b.refunded_paise;
   if (amountPaise < 1 || amountPaise > refundable) throw new HttpError(400, `Refundable amount is at most ₹${(refundable / 100).toFixed(2)}`);
-  const online = d
+  const online = await d
     .prepare("SELECT id, provider, provider_payment_id, amount_paise FROM payments WHERE booking_id = ? AND status = 'captured' AND provider_payment_id IS NOT NULL ORDER BY id DESC LIMIT 1")
-    .get(b.id) as { id: number; provider: string; provider_payment_id: string; amount_paise: number } | undefined;
+    .get<{ id: number; provider: string; provider_payment_id: string; amount_paise: number }>(b.id);
   let refundId: string | null = null;
   if (online) {
     try {
       refundId = (await payments().refund(online.provider_payment_id, amountPaise)).refundId;
     } catch (e) {
-      audit(actor, "refund_failed", b.code, { error: String(e), amountPaise });
+      await audit(actor, "refund_failed", b.code, { error: String(e), amountPaise });
       throw new HttpError(502, "The payment gateway refused the refund — try again or refund at the counter");
     }
   }
-  d.transaction(() => {
-    d.prepare("INSERT INTO payments (booking_id, provider, provider_order_id, provider_payment_id, amount_paise, status, kind, raw, created_at) VALUES (?, ?, NULL, NULL, ?, 'refunded', 'refund', ?, ?)").run(
+  await tx(async () => {
+    await d.prepare("INSERT INTO payments (booking_id, provider, provider_order_id, provider_payment_id, amount_paise, status, kind, raw, created_at) VALUES (?, ?, NULL, NULL, ?, 'refunded', 'refund', ?, ?)").run(
       b.id, online ? online.provider : b.payment_method ?? "counter", -amountPaise, JSON.stringify({ refund_id: refundId, reason, approver }), Date.now(),
     );
-    d.prepare("UPDATE bookings SET refunded_paise = refunded_paise + ? WHERE id = ?").run(amountPaise, b.id);
-    if (opts.cancel && ["hold", "confirmed"].includes(b.status)) d.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(b.id);
-    audit(actor, "refund_owner_approved", b.code, { amountPaise, reason, approvedBy: approver, via: online ? "gateway" : "counter", refundId, cancelled: opts.cancel });
-  }).immediate();
+    await d.prepare("UPDATE bookings SET refunded_paise = refunded_paise + ? WHERE id = ?").run(amountPaise, b.id);
+    if (opts.cancel && ["hold", "confirmed"].includes(b.status)) await d.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(b.id);
+    await audit(actor, "refund_owner_approved", b.code, { amountPaise, reason, approvedBy: approver, via: online ? "gateway" : "counter", refundId, cancelled: opts.cancel });
+  });
   emitChange(b.day);
   if (opts.cancel) kickWaitlist();
   return { refundedPaise: amountPaise, via: online ? "gateway" : "counter", refundId };
@@ -610,18 +647,20 @@ export async function refundBooking(code: string, amountPaise: number, actor: st
 // ---------------------------------------------------------------------------------------------
 
 
-export function signWaivers(code: string, guests: { name: string; ageBand: string }[], ip: string, via: "online" | "desk") {
+export async function signWaivers(code: string, guests: { name: string; ageBand: string }[], ip: string, via: "online" | "desk") {
   const d = db();
-  const b = getBookingByCode(code);
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
   if (!["hold", "confirmed", "arrived"].includes(b.status)) throw new HttpError(409, `Booking is ${b.status}`);
-  const already = waiverCount(b.id);
-  if (already + guests.length > b.party_size) throw new HttpError(400, `Only ${b.party_size - already} more waiver(s) needed for this booking`);
   const ins = d.prepare("INSERT INTO waivers (booking_id, customer_id, guest_name, age_band, signed_at, ip, signed_via) VALUES (?, ?, ?, ?, ?, ?, ?)");
-  d.transaction(() => {
-    for (const g of guests) ins.run(b.id, b.customer_id, g.name.trim(), g.ageBand, Date.now(), ip, via);
-  })();
-  audit(via === "desk" ? "desk" : "customer", "waivers_signed", b.code, { count: guests.length });
+  const already = await tx(async () => {
+    // Counted under the lock so two guests signing at once can't exceed the party size.
+    const n = await waiverCount(b.id);
+    if (n + guests.length > b.party_size) throw new HttpError(400, `Only ${b.party_size - n} more waiver(s) needed for this booking`);
+    for (const g of guests) await ins.run(b.id, b.customer_id, g.name.trim(), g.ageBand, Date.now(), ip, via);
+    return n;
+  });
+  await audit(via === "desk" ? "desk" : "customer", "waivers_signed", b.code, { count: guests.length });
   emitChange(b.day);
   return { signed: already + guests.length, party: b.party_size };
 }
@@ -630,33 +669,36 @@ export function signWaivers(code: string, guests: { name: string; ageBand: strin
 // Memberships
 // ---------------------------------------------------------------------------------------------
 
-export function activeMembership(phone: string, day: string) {
+export async function activeMembership(phone: string, day: string) {
   return db()
     .prepare(
       `SELECT m.* FROM memberships m JOIN customers c ON c.id = m.customer_id
        WHERE c.phone = ? AND m.valid_till >= ? AND (m.visits_left IS NULL OR m.visits_left > 0) ORDER BY m.valid_till DESC LIMIT 1`,
     )
-    .get(phone, day) as { id: number; plan: string; valid_till: string; visits_left: number | null } | undefined;
+    .get<{ id: number; plan: string; valid_till: string; visits_left: number | null }>(phone, day);
 }
 
-function validateMembership(membershipId: number | null, phone: string, day: string) {
-  const m = activeMembership(phone, day);
+async function validateMembership(membershipId: number | null, phone: string, day: string) {
+  const m = await activeMembership(phone, day);
   if (!m || (membershipId && m.id !== membershipId)) throw new HttpError(400, "No active membership with visits left for this phone");
-  const pending = (db().prepare("SELECT COUNT(*) AS n FROM bookings WHERE membership_id = ? AND status IN ('hold','confirmed')").get(m.id) as { n: number }).n;
+  const pending = (await db().prepare("SELECT COUNT(*) AS n FROM bookings WHERE membership_id = ? AND status IN ('hold','confirmed')").get<{ n: number }>(m.id))!.n;
   if (m.visits_left != null && pending >= m.visits_left) throw new HttpError(400, "All remaining membership visits are already booked");
   if (m.visits_left == null) {
-    const sameDay = db().prepare("SELECT 1 FROM bookings WHERE membership_id = ? AND day = ? AND status IN ('hold','confirmed','arrived','done')").get(m.id, day);
+    const sameDay = await db().prepare("SELECT 1 FROM bookings WHERE membership_id = ? AND day = ? AND status IN ('hold','confirmed','arrived','done')").get(m.id, day);
     if (sameDay) throw new HttpError(400, "Unlimited memberships include one visit per day");
   }
 }
 
-function burnMembershipVisit(membershipId: number, bookingId: number) {
+async function burnMembershipVisit(membershipId: number, bookingId: number) {
   const d = db();
-  d.prepare("INSERT OR IGNORE INTO membership_visits (membership_id, booking_id, used_at) VALUES (?, ?, ?)").run(membershipId, bookingId, Date.now());
-  d.prepare("UPDATE memberships SET visits_left = visits_left - 1 WHERE id = ? AND visits_left IS NOT NULL AND visits_left > 0").run(membershipId);
-  const m = d.prepare("SELECT m.visits_left, m.valid_till, c.phone, c.name FROM memberships m JOIN customers c ON c.id = m.customer_id WHERE m.id = ?").get(membershipId) as { visits_left: number | null; valid_till: string; phone: string; name: string };
+  const used = await d.prepare("INSERT INTO membership_visits (membership_id, booking_id, used_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").run(membershipId, bookingId, Date.now());
+  if (!used.changes) return;
+  await d.prepare("UPDATE memberships SET visits_left = visits_left - 1 WHERE id = ? AND visits_left IS NOT NULL AND visits_left > 0").run(membershipId);
+  const m = (await d
+    .prepare("SELECT m.visits_left, m.valid_till, c.phone, c.name FROM memberships m JOIN customers c ON c.id = m.customer_id WHERE m.id = ?")
+    .get<{ visits_left: number | null; valid_till: string; phone: string; name: string }>(membershipId))!;
   // Sent on every burned visit; the "2 visits left" case carries the renew nudge.
-  fire(sendMessage(m.phone, "membership_update", membershipParams(m, m.visits_left != null && m.visits_left <= 2 ? "Running low — renew at the desk or on WhatsApp" : "Visit used — see you soon")));
+  fire(() => sendMessage(m.phone, "membership_update", membershipParams(m, m.visits_left != null && m.visits_left <= 2 ? "Running low — renew at the desk or on WhatsApp" : "Visit used — see you soon")));
 }
 
 /** One parameter shape for every membership_update send (WhatsApp templates have fixed slots). */
@@ -677,22 +719,26 @@ export function membershipParams(m: { name: string; visits_left: number | null; 
 export async function processWaitlist() {
   const d = db();
   const t = Date.now();
-  const waiting = d.prepare("SELECT w.*, c.phone, c.name FROM waitlist w JOIN customers c ON c.id = w.customer_id WHERE w.state = 'waiting' ORDER BY w.created_at").all() as {
+  const waiting = await d.prepare("SELECT w.*, c.phone, c.name FROM waitlist w JOIN customers c ON c.id = w.customer_id WHERE w.state = 'waiting' ORDER BY w.created_at").all<{
     id: number; day: string; hour: number; product_id: string; party_size: number; token: string; phone: string; name: string;
-  }[];
+  }>();
   const busy = new Set(
-    (d.prepare("SELECT day, hour FROM waitlist WHERE state = 'offered' AND offer_expires >= ?").all(t) as { day: string; hour: number }[]).map((r) => `${r.day}:${r.hour}`),
+    (await d.prepare("SELECT day, hour FROM waitlist WHERE state = 'offered' AND offer_expires >= ?").all<{ day: string; hour: number }>(t)).map((r) => `${r.day}:${r.hour}`),
   );
   for (const w of waiting) {
     const k = `${w.day}:${w.hour}`;
     if (busy.has(k)) continue;
     try {
-      const { result } = quoteDay({ day: w.day, productId: w.product_id, party: w.party_size, channel: "online", windowStart: w.hour * 60, windowEnd: w.hour * 60 + 60, preferredMin: w.hour * 60, limit: 1 });
+      const { result } = await quoteDay({ day: w.day, productId: w.product_id, party: w.party_size, channel: "online", windowStart: w.hour * 60, windowEnd: w.hour * 60 + 60, preferredMin: w.hour * 60, limit: 1 });
       const o = result.offers[0];
       if (!o) continue;
-      d.prepare("UPDATE waitlist SET state = 'offered', offer_start = ?, offer_expires = ? WHERE id = ?").run(o.start, t + WAITLIST_OFFER_MS, w.id);
+      // Claimed conditionally: two instances processing the waitlist at once must not double-offer.
+      const claimed = await d
+        .prepare("UPDATE waitlist SET state = 'offered', offer_start = ?, offer_expires = ? WHERE id = ? AND state = 'waiting'")
+        .run(o.start, t + WAITLIST_OFFER_MS, w.id);
+      if (!claimed.changes) continue;
       busy.add(k);
-      audit("system", "waitlist_offered", `waitlist:${w.id}`, { day: w.day, start: o.start });
+      await audit("system", "waitlist_offered", `waitlist:${w.id}`, { day: w.day, start: o.start });
       await sendMessage(w.phone, "waitlist_offer", {
         name: w.name || "there",
         when: `${fmtDay(w.day)}, ${fmtMin(o.start)}`,
@@ -704,12 +750,12 @@ export async function processWaitlist() {
   }
 }
 
-export function joinWaitlist(input: { day: string; hour: number; productId: string; party: number; phone: string; name: string }) {
-  const cfg = getDayConfig(input.day);
+export async function joinWaitlist(input: { day: string; hour: number; productId: string; party: number; phone: string; name: string }) {
+  const cfg = await getDayConfig(input.day);
   if (input.hour * 60 < cfg.openMin || input.hour * 60 >= cfg.closeMin) throw new HttpError(400, "That hour is outside opening hours");
-  const customerId = upsertCustomer(input.phone, input.name);
+  const customerId = await upsertCustomer(input.phone, input.name);
   const token = crypto.randomBytes(12).toString("base64url");
-  db().prepare("INSERT INTO waitlist (day, hour, product_id, customer_id, party_size, token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+  await db().prepare("INSERT INTO waitlist (day, hour, product_id, customer_id, party_size, token, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
     input.day, input.hour, input.productId, customerId, input.party, token, Date.now(),
   );
   kickWaitlist();
@@ -722,12 +768,16 @@ export function joinWaitlist(input: { day: string; hour: number; productId: stri
 
 export async function bookingView(b: BookingRow, opts: { withQr: boolean }) {
   const d = db();
-  const p = getProduct(b.product_id)!;
-  const rooms = new Map(listRooms().map((r) => [r.id, r]));
-  const legs = getLegs(b.id).map((l) => ({ room: rooms.get(l.room_id)?.name ?? l.room_id, roomId: l.room_id, start: l.start_min, end: l.end_min }));
-  const inv = d.prepare("SELECT number FROM invoices WHERE booking_id = ?").get(b.id) as { number: string } | undefined;
-  const waivers = d.prepare("SELECT guest_name, age_band, signed_at FROM waivers WHERE booking_id = ? ORDER BY id").all(b.id) as { guest_name: string; age_band: string; signed_at: number }[];
-  const cust = customerOf(b);
+  const [p, roomList, legRows, inv, waivers, cust] = await Promise.all([
+    getProduct(b.product_id).then((x) => x!),
+    listRooms(),
+    getLegs(b.id),
+    d.prepare("SELECT number FROM invoices WHERE booking_id = ?").get<{ number: string }>(b.id),
+    d.prepare("SELECT guest_name, age_band, signed_at FROM waivers WHERE booking_id = ? ORDER BY id").all<{ guest_name: string; age_band: string; signed_at: number }>(b.id),
+    customerOf(b),
+  ]);
+  const rooms = new Map(roomList.map((r) => [r.id, r]));
+  const legs = legRows.map((l) => ({ room: rooms.get(l.room_id)?.name ?? l.room_id, roomId: l.room_id, start: l.start_min, end: l.end_min }));
   const token = bookingToken(b.code);
   const canReschedule = b.status === "confirmed" && b.reschedule_count === 0 && istToEpoch(b.day, b.start_min) - Date.now() >= 24 * 60 * 60_000 && p.shape !== "party";
   return {

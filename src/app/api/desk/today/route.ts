@@ -9,16 +9,16 @@ import { isValidDay, todayIST } from "@/lib/time";
 /** Today board: every booking by start time with status chips. */
 export const GET = handle(async (req: NextRequest) => {
   await requireStaff("desk");
-  sweep(true);
+  await sweep(true);
   const day = req.nextUrl.searchParams.get("date") || todayIST();
   if (!isValidDay(day)) throw new HttpError(400, "Bad date");
-  const products = new Map(listProducts(true).map((p) => [p.id, p.name]));
-  const rows = db()
+  const products = new Map((await listProducts(true)).map((p) => [p.id, p.name]));
+  const rows = await db()
     .prepare(
       `SELECT b.code, b.product_id, b.start_min, b.end_min, b.party_size, b.status, b.source, b.price_paise, b.paid_paise, b.payment_method,
               b.hold_expires, b.food, b.notes, b.reschedule_count, c.name, c.phone,
               (SELECT COUNT(*) FROM waivers w WHERE w.booking_id = b.id) AS waivers,
-              (SELECT GROUP_CONCAT(r.name, ' → ') FROM booking_legs l JOIN rooms r ON r.id = l.room_id WHERE l.booking_id = b.id) AS rooms
+              (SELECT string_agg(r.name, ' → ' ORDER BY l.leg_no) FROM booking_legs l JOIN rooms r ON r.id = l.room_id WHERE l.booking_id = b.id) AS rooms
        FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id
        WHERE b.day = ? AND b.status NOT IN ('expired')
        ORDER BY b.start_min, b.id`,

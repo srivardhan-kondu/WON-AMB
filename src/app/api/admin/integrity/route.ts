@@ -7,7 +7,7 @@ import { approveOverride } from "@/lib/override";
 /** Ledger integrity status (§9): the lock (if any) plus a fresh rebuild-and-compare. */
 export const GET = handle(async () => {
   await requireStaff("manager");
-  return json({ lock: integrityLock(), problems: checkIntegrity() });
+  return json({ lock: await integrityLock(), problems: await checkIntegrity() });
 });
 
 const A = z.discriminatedUnion("action", [
@@ -20,10 +20,10 @@ export const POST = handle(async (req: Request) => {
   const staff = await requireStaff("manager");
   const a = await body(req, A);
   if (a.action === "recheck") {
-    const problems = runIntegrityCheck("manual", staff.email);
-    return json({ lock: integrityLock(), problems });
+    const problems = await runIntegrityCheck("manual", staff.email);
+    return json({ lock: await integrityLock(), problems });
   }
-  const approver = approveOverride(req, staff, a.managerPin, "integrity_unlock", ["owner"]);
-  forceUnlock(staff.email, `${a.reason} (approved by ${approver})`);
-  return json({ lock: null, problems: checkIntegrity() });
+  const approver = await approveOverride(req, staff, a.managerPin, "integrity_unlock", ["owner"]);
+  await forceUnlock(staff.email, `${a.reason} (approved by ${approver})`);
+  return json({ lock: null, problems: await checkIntegrity() });
 });

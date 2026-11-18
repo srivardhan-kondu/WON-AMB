@@ -18,13 +18,14 @@ export interface RunsheetLeg {
   waiversOk: boolean;
 }
 
-export function runsheet(day: string) {
+export async function runsheet(day: string) {
   const d = db();
-  const rooms = listRooms();
-  const cfg = getDayConfig(day);
-  const products = new Map(listProducts(true).map((p) => [p.id, p]));
   const t = Date.now();
-  const rows = d
+  const [rooms, cfg, productList, rows, blockRows, ledger] = await Promise.all([
+    listRooms(),
+    getDayConfig(day),
+    listProducts(true),
+    d
     .prepare(
       `SELECT l.room_id, l.start_min, l.end_min, b.code, b.product_id, b.party_size, b.status, b.food, b.hold_expires, b.id AS booking_id,
               COALESCE(c.name, '') AS name, (SELECT COUNT(*) FROM waivers w WHERE w.booking_id = b.id) AS waivers
@@ -32,10 +33,16 @@ export function runsheet(day: string) {
        WHERE l.day = ? AND b.status IN ('hold','confirmed','arrived','done','no_show')
        ORDER BY l.start_min`,
     )
-    .all(day) as {
+    .all<{
     room_id: string; start_min: number; end_min: number; code: string; product_id: string; party_size: number; status: string;
     food: number; hold_expires: number | null; booking_id: number; name: string; waivers: number;
-  }[];
+  }>(day),
+    d
+      .prepare("SELECT cb.room_id, cb.start_min, cb.end_min, cb.reason FROM calendar_blocks cb LEFT JOIN bookings b ON b.id = cb.booking_id WHERE cb.day = ? AND (cb.booking_id IS NULL OR b.status IN ('hold','confirmed','arrived','done'))")
+      .all<{ room_id: string; start_min: number; end_min: number; reason: string }>(day),
+    buildLedger(day),
+  ]);
+  const products = new Map(productList.map((p) => [p.id, p]));
 
   const byRoom = new Map<string, RunsheetLeg[]>(rooms.map((r) => [r.id, []]));
   for (const r of rows) {
@@ -54,15 +61,11 @@ export function runsheet(day: string) {
     });
   }
 
-  const blockRows = d.prepare("SELECT cb.room_id, cb.start_min, cb.end_min, cb.reason FROM calendar_blocks cb LEFT JOIN bookings b ON b.id = cb.booking_id WHERE cb.day = ? AND (cb.booking_id IS NULL OR b.status IN ('hold','confirmed','arrived','done'))").all(day) as {
-    room_id: string; start_min: number; end_min: number; reason: string;
-  }[];
   const blocks = [
     ...builtInBlocks(rooms, cfg),
     ...blockRows.map((b) => ({ roomId: b.room_id, start: b.start_min, end: b.end_min, reason: b.reason })),
   ];
 
-  const ledger = buildLedger(day);
   const rotationHours = [...ledger.rotLegs].map((v, h) => (v > 0 ? h : -1)).filter((h) => h >= 0);
 
   const now = nowIST();

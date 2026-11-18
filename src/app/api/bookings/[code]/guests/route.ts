@@ -15,5 +15,5 @@ export const PUT = handle(async (req: NextRequest, ctx: { params: Promise<{ code
   const { code } = await ctx.params;
   const { booking, staff } = await bookingAccess(code, req.nextUrl);
   const { guests } = await body(req, G);
-  return json({ guests: updateGuests(booking.code, guests, staff ? "desk" : "customer") });
+  return json({ guests: await updateGuests(booking.code, guests, staff ? "desk" : "customer") });
 });

@@ -4,9 +4,18 @@ import { sweep } from "@/lib/bookings";
 import { events } from "@/lib/events";
 import { handle } from "@/lib/http";
 import { runsheet } from "@/lib/runsheet";
+import { maybeTick } from "@/lib/scheduler";
 import { isValidDay, todayIST } from "@/lib/time";
 
-/** SSE: pushes a fresh runsheet snapshot on every commit for the day, plus a 30 s heartbeat. */
+const POLL_MS = 4_000;
+const HEARTBEAT_MS = 25_000;
+// Serverless functions have a maximum duration; end the stream before it and let EventSource reconnect.
+const STREAM_MS = 55_000;
+
+/**
+ * SSE: pushes a fresh runsheet snapshot whenever it changes. Commits on this instance are pushed
+ * immediately (in-process events); commits on other instances are picked up by a short DB poll.
+ */
 export const GET = handle(async (req: NextRequest) => {
   await requireStaff("floor");
   const q = req.nextUrl.searchParams.get("date");
@@ -15,12 +24,27 @@ export const GET = handle(async (req: NextRequest) => {
   let cleanup = () => {};
   const stream = new ReadableStream({
     start(controller) {
-      const send = () => {
+      let closed = false;
+      let last = "";
+      let busy = false;
+      const write = (s: string) => {
+        if (!closed) controller.enqueue(enc.encode(s));
+      };
+      const send = async (force = false) => {
+        if (busy || closed) return;
+        busy = true;
         try {
-          sweep();
-          controller.enqueue(enc.encode(`data: ${JSON.stringify(runsheet(day))}\n\n`));
-        } catch {
-          cleanup();
+          maybeTick(); // open runsheet screens keep the scheduler ticking during opening hours
+          await sweep();
+          const snap = JSON.stringify(await runsheet(day));
+          if (force || snap !== last) {
+            last = snap;
+            write(`data: ${snap}\n\n`);
+          }
+        } catch (e) {
+          console.error("[won] runsheet stream", e);
+        } finally {
+          busy = false;
         }
       };
       let pending: ReturnType<typeof setTimeout> | null = null;
@@ -28,14 +52,24 @@ export const GET = handle(async (req: NextRequest) => {
         if (d !== day || pending) return;
         pending = setTimeout(() => {
           pending = null;
-          send();
+          void send();
         }, 150);
       };
       events().on("change", onChange);
-      const beat = setInterval(send, 30_000);
+      const poll = setInterval(() => void send(), POLL_MS);
+      const beat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS);
+      const end = setTimeout(() => {
+        cleanup();
+        try {
+          controller.close();
+        } catch {}
+      }, STREAM_MS);
       cleanup = () => {
+        closed = true;
         events().off("change", onChange);
+        clearInterval(poll);
         clearInterval(beat);
+        clearTimeout(end);
         if (pending) clearTimeout(pending);
       };
       req.signal.addEventListener("abort", () => {
@@ -44,7 +78,8 @@ export const GET = handle(async (req: NextRequest) => {
           controller.close();
         } catch {}
       });
-      send();
+      write("retry: 1000\n\n");
+      void send(true);
     },
     cancel() {
       cleanup();

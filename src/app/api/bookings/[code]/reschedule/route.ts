@@ -14,19 +14,19 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ code: s
   const r = await body(req, R);
   const phone = await getCustomerPhone();
   if (!phone) throw new HttpError(401, "Verify your phone first");
-  const b = getBookingByCode(code);
+  const b = await getBookingByCode(code);
   if (!b) throw new HttpError(404, "Booking not found");
-  const c = db().prepare("SELECT phone FROM customers WHERE id = ?").get(b.customer_id) as { phone: string } | undefined;
+  const c = await db().prepare("SELECT phone FROM customers WHERE id = ?").get(b.customer_id) as { phone: string } | undefined;
   if (!c || c.phone !== phone) throw new HttpError(403, "This booking belongs to a different phone number");
   if (r.start == null) {
-    const { result } = quoteDay({ day: r.date, productId: b.product_id, party: b.party_size, channel: "online", excludeBookingId: b.id, preferredMin: b.start_min, limit: 8 });
-    const names = roomNames();
+    const { result } = await quoteDay({ day: r.date, productId: b.product_id, party: b.party_size, channel: "online", excludeBookingId: b.id, preferredMin: b.start_min, limit: 8 });
+    const names = await roomNames();
     return json({
       offers: result.offers
         .filter((o) => !(r.date === b.day && o.start === b.start_min))
         .map((o) => ({ ...o, legs: o.legs.map((l) => ({ ...l, room: names.get(l.roomId) })) })),
     });
   }
-  reschedule(b.code, r.date, r.start, "customer", { override: false });
+  await reschedule(b.code, r.date, r.start, "customer", { override: false });
   return json({ ok: true });
 });

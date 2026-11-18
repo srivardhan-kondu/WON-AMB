@@ -26,11 +26,11 @@ export const POST = handle(async (req: Request) => {
   let approver: string | null = null;
   if (w.payment === "comp") {
     if (!w.reason) throw new HttpError(400, "Give a reason for the comp ticket");
-    approver = approveOverride(req, staff, w.managerPin, "comp_ticket");
+    approver = await approveOverride(req, staff, w.managerPin, "comp_ticket");
   }
   const phone = normalizePhone(w.phone);
   const day = w.date ?? todayIST();
-  const m = w.payment === "membership" ? activeMembership(phone, day) : undefined;
+  const m = w.payment === "membership" ? await activeMembership(phone, day) : undefined;
   const res = await createHold({
     day, productId: w.product, party: w.party, start: w.start, chosenRooms: w.chosenRooms, name: w.name, phone,
     source: w.source, payment: w.payment, idemKey: req.headers.get("idempotency-key"), actor: staff.email,

@@ -8,5 +8,5 @@ export const GET = handle(async (req: NextRequest) => {
   await requireStaff("manager");
   const q = req.nextUrl.searchParams.get("week");
   const ws = weekStart(q && isValidDay(q) ? q : todayIST());
-  return json({ current: weekKpis(ws), previous: weekKpis(addDays(ws, -7)) });
+  return json({ current: await weekKpis(ws), previous: await weekKpis(addDays(ws, -7)) });
 });

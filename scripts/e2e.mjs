@@ -1,10 +1,20 @@
 // End-to-end test against a running server.
-// Usage: WON_DB_PATH=./data/e2e.db npm start   then   npm run test:e2e -- http://localhost:3000 ./data/e2e.db
+// Usage: DATABASE_URL=<throwaway db> npm start   then   npm run test:e2e -- http://localhost:3000 <same DATABASE_URL>
 // Use a throwaway database — the test creates bookings and changes prices/day config.
-import Database from "better-sqlite3";
+import pg from "pg";
 
+pg.types.setTypeParser(pg.types.builtins.INT8, Number);
+pg.types.setTypeParser(pg.types.builtins.NUMERIC, Number);
 const BASE = process.argv[2];
-const db = new Database(process.argv[3]);
+const pool = new pg.Pool({ connectionString: process.argv[3] || process.env.DATABASE_URL, max: 2 });
+const toPg = (sql) => { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); };
+const db = {
+  prepare: (sql) => ({
+    get: async (...a) => (await pool.query(toPg(sql), a)).rows[0],
+    all: async (...a) => (await pool.query(toPg(sql), a)).rows,
+    run: async (...a) => { await pool.query(toPg(sql), a); },
+  }),
+};
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("  ✓", m); } else { fail++; console.log("  ✗", m); } };
 
@@ -55,7 +65,7 @@ ok(pay2.j.deduped, "replayed webhook deduped");
 const view = await call(`/api/bookings/${hold.j.code}?t=${hold.j.token}`);
 ok(view.j.status === "confirmed" && view.j.paidPaise === 399600 && view.j.invoice?.startsWith("WON/"), `confirmed, paid ₹${view.j.paidPaise / 100}, invoice ${view.j.invoice}`);
 ok(view.j.qr?.startsWith("data:image/png"), "QR generated");
-const msgs = db.prepare("SELECT template FROM messages WHERE template='booking_confirmed'").all();
+const msgs = (await db.prepare("SELECT template FROM messages WHERE template='booking_confirmed'").all());
 ok(msgs.length >= 1, "WhatsApp confirmation logged to outbox");
 
 console.log("3. Waivers");
@@ -76,24 +86,24 @@ const winners = racers.filter((r) => r.status === 201).length;
 const losers = racers.filter((r) => r.status === 409);
 ok(winners === 1 && losers.length === 5, `exactly one racer won (${winners} won, ${losers.length} got 409)`);
 ok(losers[0]?.j.alternatives?.length > 0, `losers get alternatives (${losers[0]?.j.alternatives?.map((a) => a.start).join(",")})`);
-const occ = db.prepare(`SELECT SUM(party_size) n FROM bookings WHERE day=? AND start_min=? AND product_id='splat' AND status IN ('hold','confirmed')`).get(wk, splatStart);
+const occ = (await db.prepare(`SELECT SUM(party_size) AS n FROM bookings WHERE day=? AND start_min=? AND product_id='splat' AND status IN ('hold','confirmed')`).get(wk, splatStart));
 ok(occ.n === 12, `session holds exactly 12 (got ${occ.n})`);
 
 console.log("5. Hold expiry & late payment");
 const h2 = await call("/api/holds", { body: { product: "c1", party: 2, date: wk, start: 14 * 60, name: "Late Payer", phone: "9111111111" } });
-db.prepare("UPDATE bookings SET hold_expires = ? WHERE code = ?").run(Date.now() - 1000, h2.j.code);
+(await db.prepare("UPDATE bookings SET hold_expires = ? WHERE code = ?").run(Date.now() - 1000, h2.j.code));
 const late = await call("/api/payments/mock", { body: { orderId: h2.j.order.orderId, outcome: "success" } });
 const lv = await call(`/api/bookings/${h2.j.code}?t=${h2.j.token}`);
 ok(late.j.ok && lv.j.status === "confirmed", "late payment re-commits when seats are still free");
 // Late payment where seats are gone → auto refund
 const h3 = await call("/api/holds", { body: { product: "splat", party: 12, date: wk, start: 11 * 60, name: "Slow UPI", phone: "9222222222" } });
-db.prepare("UPDATE bookings SET hold_expires = ? WHERE code = ?").run(Date.now() - 1000, h3.j.code);
+(await db.prepare("UPDATE bookings SET hold_expires = ? WHERE code = ?").run(Date.now() - 1000, h3.j.code));
 const thief = await call("/api/holds", { body: { product: "splat", party: 12, date: wk, start: 11 * 60, name: "Faster", phone: "9333333333" } });
 ok(thief.status === 201, "expired hold's seats resold");
 const late2 = await call("/api/payments/mock", { body: { orderId: h3.j.order.orderId, outcome: "success" } });
 ok(late2.j.refunded === true, "late payment with seats gone → auto refund");
-ok(db.prepare("SELECT status FROM payments WHERE provider_order_id=?").get(h3.j.order.orderId).status === "refunded", "payment row marked refunded");
-ok(db.prepare("SELECT COUNT(*) n FROM messages WHERE template='booking_apology'").get().n === 1, "apology + alternatives message sent");
+ok((await db.prepare("SELECT status FROM payments WHERE provider_order_id=?").get(h3.j.order.orderId)).status === "refunded", "payment row marked refunded");
+ok((await db.prepare("SELECT COUNT(*) AS n FROM messages WHERE template='booking_apology'").get()).n === 1, "apology + alternatives message sent");
 
 console.log("6. Rotation Hours don't mix with 20-min grid");
 const a5 = await call("/api/holds", { body: { product: "a5", party: 3, date: wk, start: 19 * 60, name: "All Five", phone: "9444444444" } });
@@ -160,7 +170,7 @@ ok(audit.j.events.some((e) => e.action === "product_updated") && audit.j.events.
 
 console.log("11. Reschedule with OTP");
 const otp = await call("/api/otp/send", { body: { phone: "9876543210" } });
-const otpCode = otp.j.devCode ?? JSON.parse(db.prepare("SELECT payload FROM messages WHERE template='otp' ORDER BY id DESC LIMIT 1").get().payload).code;
+const otpCode = otp.j.devCode ?? JSON.parse((await db.prepare("SELECT payload FROM messages WHERE template='otp' ORDER BY id DESC LIMIT 1").get()).payload).code;
 const ver = await call("/api/otp/verify", { body: { phone: "9876543210", code: otpCode } });
 const cust = ver.setCookie.split(";")[0];
 // Use a booking ≥ 24 h out so the result doesn't depend on the time of day the suite runs.
@@ -191,8 +201,13 @@ const badPin = await call(`/api/bookings/${full.j.code}/cancel`, { cookie: desk,
 ok(badPin.status === 403, "wrong manager PIN refused");
 const okPin = await call(`/api/bookings/${full.j.code}/cancel`, { cookie: desk, body: { reason: "group cancelled by phone", managerPin: "2468" } });
 ok(okPin.status === 200, "desk cancel approved by manager PIN at the counter");
-await new Promise((r) => setTimeout(r, 500));
-const wl = db.prepare("SELECT state, offer_start, token FROM waitlist WHERE day = ?").get(wk);
+// The offer is made in the background after the cancel responds; poll for it (remote DB latency varies).
+let wl;
+for (let i = 0; i < 25; i++) {
+  await new Promise((r) => setTimeout(r, 200));
+  wl = (await db.prepare("SELECT state, offer_start, token FROM waitlist WHERE day = ?").get(wk));
+  if (wl?.state === "offered") break;
+}
 ok(wl.state === "offered" && wl.offer_start === s3, `waitlist offered ${wl.offer_start}`);
 const acc = await call(`/api/waitlist/${wl.token}`, { method: "POST", body: {} });
 ok(acc.status === 201 && acc.j.status === "hold", "waitlister accepted → hold → payment");
@@ -200,9 +215,9 @@ ok(acc.status === 201 && acc.j.status === "hold", "waitlister accepted → hold 
 console.log("13. Comp tickets & overrides via manager PIN");
 const comp2 = await call("/api/desk/walkin", { cookie: desk, body: { date: today, product: "c1", party: 1, start: wq.j.offers[0].start, name: "VIP", phone: "9555555557", payment: "comp", reason: "influencer visit", managerPin: "2468" } });
 ok(comp2.status === 201 && comp2.j.pricePaise === 0, "comp ticket issued with manager PIN, ₹0");
-ok(db.prepare("SELECT notes FROM bookings WHERE code = ?").get(comp2.j.code).notes.includes("approved by manager@won.local"), "approver recorded on booking (unique PINs)");
+ok((await db.prepare("SELECT notes FROM bookings WHERE code = ?").get(comp2.j.code)).notes.includes("approved by manager@won.local"), "approver recorded on booking (unique PINs)");
 const ownerComp = await call("/api/desk/walkin", { cookie: desk, body: { date: today, product: "c1", party: 1, start: wq.j.offers[0].start, name: "VIP2", phone: "9555555558", payment: "comp", reason: "owner guest", managerPin: "1357" } });
-ok(db.prepare("SELECT notes FROM bookings WHERE code = ?").get(ownerComp.j.code)?.notes.includes("approved by owner@won.local"), "owner's PIN attributed to owner");
+ok((await db.prepare("SELECT notes FROM bookings WHERE code = ?").get(ownerComp.j.code))?.notes.includes("approved by owner@won.local"), "owner's PIN attributed to owner");
 const rush = await call("/api/party-bookings", { cookie: desk, body: { date: tomorrow, product: "party_neon", party: 10, start: 14 * 60 + 45, name: "Rush", phone: "9666666668", payment: "cash", overrideLead: true, managerPin: "2468" } });
 ok(rush.status === 201, "short-notice party allowed with manager PIN override");
 
@@ -272,7 +287,7 @@ ok((await call("/api/me")).status === 401, "/api/me needs OTP login");
 const mo = await call("/api/otp/send", { body: { phone: "9012345678" } });
 ok(mo.status === 200, "OTP sent to member");
 ok((await call("/api/otp/send", { body: { phone: "9012345678" } })).status === 429, "second OTP within 30 s refused (per-phone limit)");
-const moCode = mo.j.devCode ?? JSON.parse(db.prepare("SELECT payload FROM messages WHERE template='otp' AND to_phone LIKE '%9012345678' ORDER BY id DESC LIMIT 1").get().payload).code;
+const moCode = mo.j.devCode ?? JSON.parse((await db.prepare("SELECT payload FROM messages WHERE template='otp' AND to_phone LIKE '%9012345678' ORDER BY id DESC LIMIT 1").get()).payload).code;
 const meVerify = await call("/api/otp/verify", { body: { phone: "9012345678", code: moCode } });
 const meCookie = meVerify.setCookie?.split(";")[0];
 const me = await call("/api/me", { cookie: meCookie });
@@ -312,12 +327,12 @@ console.log("22. All 5 as 5 × 20 min + rejection log");
 const a5Day = addDays(wk, 7);
 const cfg0 = (await call(`/api/day-config/${a5Day}`, { cookie: mgr })).j;
 const cfgBody = (o) => ({ openMin: cfg0.openMin, closeMin: cfg0.closeMin, peak: "auto", holdbackPct: cfg0.holdbackPct, deepCleanStart: cfg0.deepCleanStart, deepCleanMin: cfg0.deepCleanMin, deepCleanZone: cfg0.deepCleanZone, rotationHours: [], ...o });
-const rej0 = db.prepare("SELECT COUNT(*) AS n FROM quote_rejections").get().n;
+const rej0 = (await db.prepare("SELECT COUNT(*) AS n FROM quote_rejections").get()).n;
 await call(`/api/day-config/${a5Day}`, { method: "PUT", cookie: mgr, body: cfgBody({ closeMin: 12 * 60, all5Mode: "grid" }) });
 const none = await call("/api/quote", { body: { product: "a5", party: 2, date: a5Day } });
 ok(none.j.offers.length === 0, "100-min All 5 can't fit a 1-hour day");
-const rej = db.prepare("SELECT * FROM quote_rejections ORDER BY id DESC LIMIT 1").get();
-ok(db.prepare("SELECT COUNT(*) AS n FROM quote_rejections").get().n === rej0 + 1 && rej.false_sellout === 0, "rejection logged, not a false sell-out");
+const rej = (await db.prepare("SELECT * FROM quote_rejections ORDER BY id DESC LIMIT 1").get());
+ok((await db.prepare("SELECT COUNT(*) AS n FROM quote_rejections").get()).n === rej0 + 1 && rej.false_sellout === 0, "rejection logged, not a false sell-out");
 const set5 = await call(`/api/day-config/${a5Day}`, { method: "PUT", cookie: mgr, body: cfgBody({ all5Mode: "grid" }) });
 ok(set5.j.all5Mode === "grid" && set5.j.all5Override === "grid", "day set to All 5 = 5 × 20 min");
 const g5 = await call("/api/quote", { body: { product: "a5", party: 2, date: a5Day, preferredMin: 12 * 60 } });
@@ -340,10 +355,10 @@ const rf2 = await call(`/api/bookings/${hold.j.code}/refund`, { cookie: mgr, bod
 ok(rf2.status === 400, "can't refund more than was paid");
 const rv = await call(`/api/bookings/${hold.j.code}?t=${hold.j.token}`);
 ok(rv.j.refundedPaise === 100000 && rv.j.status === "confirmed", "refund recorded; booking kept (cancel not ticked)");
-ok(db.prepare("SELECT detail FROM events_audit WHERE action = 'refund_owner_approved' ORDER BY id DESC LIMIT 1").get()?.detail.includes("owner@won.local"), "audit names the owner as approver");
+ok((await db.prepare("SELECT detail FROM events_audit WHERE action = 'refund_owner_approved' ORDER BY id DESC LIMIT 1").get())?.detail.includes("owner@won.local"), "audit names the owner as approver");
 
 console.log("24. Crash recovery: rebuild, compare, pause sales");
-db.prepare("UPDATE bookings SET party_size = 60 WHERE code = ?").run(hold.j.code); // simulate a corrupt row (60 guests in a 6-seat room)
+(await db.prepare("UPDATE bookings SET party_size = 60 WHERE code = ?").run(hold.j.code)); // simulate a corrupt row (60 guests in a 6-seat room)
 const hBad = await call("/api/health");
 ok(hBad.status === 503 && hBad.j.bookingsPaused && hBad.j.problems.length > 0, `health 503, bookings paused: ${hBad.j.problems?.[0]}`);
 const blocked = await call("/api/holds", { body: { product: "c1", party: 1, date: wk, start: 12 * 60, name: "Blocked", phone: "9100000006" } });
@@ -352,7 +367,7 @@ const ig = await call("/api/admin/integrity", { cookie: mgr });
 ok(ig.j.lock && ig.j.problems.length > 0, "dashboard shows the lock and the problem");
 const stillBad = await call("/api/admin/integrity", { cookie: mgr, body: { action: "recheck" } });
 ok(stillBad.j.lock, "re-check keeps the pause while the problem exists");
-db.prepare("UPDATE bookings SET party_size = 4 WHERE code = ?").run(hold.j.code);
+(await db.prepare("UPDATE bookings SET party_size = 4 WHERE code = ?").run(hold.j.code));
 const fixed = await call("/api/admin/integrity", { cookie: mgr, body: { action: "recheck" } });
 ok(!fixed.j.lock && fixed.j.problems.length === 0, "fixed + re-checked → sales reopen");
 const freeQ = await call("/api/quote", { body: { product: "c1", party: 1, date: wk } });

@@ -15,5 +15,5 @@ const W = z.object({
 export const POST = handle(async (req: Request) => {
   rateLimit(req, "waitlist", 10);
   const w = await body(req, W);
-  return json(joinWaitlist({ day: w.date, hour: w.hour, productId: w.product, party: w.party, phone: normalizePhone(w.phone), name: w.name }), 201);
+  return json(await joinWaitlist({ day: w.date, hour: w.hour, productId: w.product, party: w.party, phone: normalizePhone(w.phone), name: w.name }), 201);
 });

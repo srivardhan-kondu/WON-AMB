@@ -17,7 +17,7 @@ npm install
 npm run dev            # http://localhost:3000
 ```
 
-The SQLite database is created and seeded on first request at `./data/won.db`. Demo staff logins all use the password `won12345`:
+Set `DATABASE_URL` in `.env.local` to a Postgres database (production runs on Neon; use the pooled `-pooler` host). The schema is created and seeded on the first request. Demo staff logins all use the password `won12345`:
 `owner@won.local`, `manager@won.local`, `desk@won.local`, `floor@won.local`.
 Demo override PINs: manager `2468`, owner `1357`. Change all of these in `/account` before going live.
 
@@ -33,10 +33,10 @@ To go live, copy `.env.example` to `.env.local` and set `WON_SECRET`, the Razorp
 npm run simulate       # simulated Saturday + engine invariants (no server needed)
 npm run typecheck
 npm run lint
-npm run backup && npm run restore-test   # snapshot the DB, then prove the newest backup restores
-# end-to-end (122 checks) against a running server, on a THROWAWAY database:
-WON_DB_PATH=./data/e2e.db npm run build && WON_DB_PATH=./data/e2e.db npm start
-npm run test:e2e -- http://localhost:3000 ./data/e2e.db
+npm run backup && npm run restore-test   # pg_dump the DB, then prove the newest backup restores (needs pg_dump 18)
+# end-to-end (122 checks) against a running server, on a THROWAWAY database (never production):
+DATABASE_URL=$E2E_URL npm run build && DATABASE_URL=$E2E_URL npm start
+npm run test:e2e -- http://localhost:3000 "$E2E_URL"
 ```
 
 The e2e suite covers:
@@ -135,3 +135,15 @@ Keep `won-app` at **one instance**. The commit lock and the runsheet feed are in
 - Sentry error tracking. Add a DSN and `onRequestError` in `src/instrumentation.ts`.
 - Booking a member visit online. Members book at the desk, where the visit is used at check-in. `/me` shows what's left.
 - Not code: an OpenAPI spec, the 10× load test, staff training notes, a staging copy, and Cloudflare in front.
+
+## Deploying on Vercel
+
+- **Database:** Neon Postgres via `DATABASE_URL`. All commits run in a transaction holding one advisory lock (`src/lib/db.ts`), so two instances can never sell the same seat.
+- **Region:** `vercel.json` pins functions to `sin1` (Singapore), next to the Neon database. Keep the two in the same region, because every request makes several queries.
+- **Scheduler:** there's no long-lived process, so `runTick()` in `src/lib/scheduler.ts` (hold expiry, no-shows, reminders, waitlist, scheduled prices, flash check, integrity check) is triggered by:
+  - API traffic, at most once a minute;
+  - open runsheet screens;
+  - Vercel Cron (`/api/cron/tick`, daily in `vercel.json`).
+
+  For minute-level reminders when nobody is using the app, point an external pinger (cron-job.org, UptimeRobot) at `/api/cron/tick` every minute with the header `Authorization: Bearer $CRON_SECRET`. On Vercel Pro you can instead change the cron schedule to `* * * * *`.
+- **Env vars:** `DATABASE_URL`, `WON_SECRET`, `CRON_SECRET`, `WON_BASE_URL`, plus the Razorpay and WhatsApp keys when going live.

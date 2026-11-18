@@ -18,9 +18,9 @@ export const POST = handle(async (req: Request) => {
   rateLimit(req, "quote", 60);
   const q = await body(req, Q);
   const channel = q.channel === "desk" && (await getStaff()) ? "desk" : "online";
-  const { product, result } = quoteDay({ day: q.date, productId: q.product, party: q.party, preferredMin: q.preferredMin, chosenRooms: q.chosenRooms, channel, logRejection: true });
-  const names = roomNames();
+  const { product, result } = await quoteDay({ day: q.date, productId: q.product, party: q.party, preferredMin: q.preferredMin, chosenRooms: q.chosenRooms, channel, logRejection: true });
+  const names = await roomNames();
   const offers = result.offers.map((o) => ({ ...o, legs: o.legs.map((l) => ({ ...l, room: names.get(l.roomId) ?? l.roomId })) }));
-  const upsells = offers[0] ? upsellsFor(q.date, product, q.party, offers[0].start, channel) : [];
+  const upsells = offers[0] ? await upsellsFor(q.date, product, q.party, offers[0].start, channel) : [];
   return json({ offers, upsells, error: result.error ?? (offers.length ? null : "No slots left for this day — try another date or join the waitlist") });
 });

@@ -7,8 +7,8 @@ import { isValidDay, todayIST } from "@/lib/time";
 
 export const GET = handle(async (req: NextRequest) => {
   await requireStaff("floor");
-  sweep();
+  await sweep();
   const day = req.nextUrl.searchParams.get("date") || todayIST();
   if (!isValidDay(day)) throw new HttpError(400, "Bad date");
-  return json(runsheet(day));
+  return json(await runsheet(day));
 });

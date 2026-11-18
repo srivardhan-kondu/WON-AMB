@@ -12,7 +12,7 @@ export const POST = handle(async (req: Request) => {
   const m = await body(req, M);
   if (!m.orderId.startsWith("mock_order_")) throw new HttpError(400, "Not a mock order");
   if (m.outcome === "fail") {
-    handlePaymentFailed(m.orderId);
+    await handlePaymentFailed(m.orderId);
     return json({ ok: true, failed: true });
   }
   return json(await handlePaymentCaptured(m.orderId, "mock_pay_" + crypto.randomBytes(6).toString("hex"), null, { mock: true }));

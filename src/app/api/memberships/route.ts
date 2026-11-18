@@ -10,8 +10,8 @@ import { addDays, todayIST } from "@/lib/time";
 export const GET = handle(async (req: NextRequest) => {
   await requireStaff("desk");
   const phone = req.nextUrl.searchParams.get("phone");
-  if (phone) return json({ membership: activeMembership(normalizePhone(phone), todayIST()) ?? null });
-  const rows = db()
+  if (phone) return json({ membership: await activeMembership(normalizePhone(phone), todayIST()) ?? null });
+  const rows = await db()
     .prepare("SELECT m.*, c.name, c.phone, (SELECT COUNT(*) FROM membership_visits v WHERE v.membership_id = m.id) AS used FROM memberships m JOIN customers c ON c.id = m.customer_id ORDER BY m.valid_till DESC")
     .all();
   return json({ memberships: rows });
@@ -28,9 +28,9 @@ const M = z.object({
 export const POST = handle(async (req: Request) => {
   const staff = await requireStaff("manager");
   const m = await body(req, M);
-  const customerId = upsertCustomer(normalizePhone(m.phone), m.name);
+  const customerId = await upsertCustomer(normalizePhone(m.phone), m.name);
   const validTill = addDays(todayIST(), m.months === 6 ? 182 : 365);
-  const id = db().prepare("INSERT INTO memberships (customer_id, plan, valid_till, visits_left, created_at) VALUES (?, ?, ?, ?, ?)").run(customerId, m.plan, validTill, m.visits, Date.now()).lastInsertRowid;
-  audit(staff.email, "membership_created", `membership:${id}`, m);
+  const id = (await db().prepare("INSERT INTO memberships (customer_id, plan, valid_till, visits_left, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id").run<{ id: number }>(customerId, m.plan, validTill, m.visits, Date.now())).rows[0].id;
+  await audit(staff.email, "membership_created", `membership:${id}`, m);
   return json({ id: Number(id), validTill }, 201);
 });

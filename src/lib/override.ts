@@ -6,16 +6,16 @@ import { HttpError, rateLimit } from "./http";
 import type { StaffSession } from "./auth";
 import { audit } from "./repo";
 
-export function approveOverride(req: Request, staff: StaffSession, pin: string | null | undefined, action: string, roles: ("manager" | "owner")[] = ["manager", "owner"]): string {
+export async function approveOverride(req: Request, staff: StaffSession, pin: string | null | undefined, action: string, roles: ("manager" | "owner")[] = ["manager", "owner"]): Promise<string> {
   const who = roles.includes("manager") ? "Manager" : "Owner";
   if (!pin) throw new HttpError(403, `${who} PIN required for this override`, { needPin: true });
   rateLimit(req, "manager-pin", 10);
-  const rows = db().prepare(`SELECT email, pin_hash FROM staff_users WHERE role IN (${roles.map(() => "?").join(",")}) AND active = 1 AND pin_hash IS NOT NULL`).all(...roles) as { email: string; pin_hash: string }[];
+  const rows = await db().prepare("SELECT email, pin_hash FROM staff_users WHERE role = ANY(?) AND active = 1 AND pin_hash IS NOT NULL").all<{ email: string; pin_hash: string }>(roles);
   // Prefer the acting user's own PIN if they are a manager.
   rows.sort((a, b) => (a.email === staff.email ? -1 : b.email === staff.email ? 1 : 0));
   const approver = rows.find((r) => bcrypt.compareSync(pin, r.pin_hash));
   if (!approver) {
-    audit(staff.email, "override_pin_rejected", action);
+    await audit(staff.email, "override_pin_rejected", action);
     throw new HttpError(403, `Wrong ${who.toLowerCase()} PIN`, { needPin: true });
   }
   return approver.email;

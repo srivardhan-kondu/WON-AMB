@@ -9,7 +9,7 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ code: s
   const staff = await requireStaff("desk");
   const { reason, managerPin } = await body(req, z.object({ reason: z.string().trim().min(3).max(200), managerPin: z.string().optional() }));
   const { code } = await ctx.params;
-  const approver = approveOverride(req, staff, managerPin, `cancel:${code}`);
-  cancelBooking(code, staff.email, `${reason} (approved by ${approver})`);
+  const approver = await approveOverride(req, staff, managerPin, `cancel:${code}`);
+  await cancelBooking(code, staff.email, `${reason} (approved by ${approver})`);
   return json({ ok: true });
 });

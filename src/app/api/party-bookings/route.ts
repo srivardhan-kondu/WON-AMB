@@ -23,8 +23,8 @@ const P = z.object({
 export const POST = handle(async (req: Request) => {
   const staff = await requireStaff("desk");
   const p = await body(req, P);
-  if (getProduct(p.product)?.shape !== "party") throw new HttpError(400, "Not a party product");
-  const approver = p.overrideLead ? approveOverride(req, staff, p.managerPin, "party_48h_override") : null;
+  if ((await getProduct(p.product))?.shape !== "party") throw new HttpError(400, "Not a party product");
+  const approver = p.overrideLead ? await approveOverride(req, staff, p.managerPin, "party_48h_override") : null;
   const res = await createHold({
     day: p.date, productId: p.product, party: p.party, start: p.start, name: p.name, phone: normalizePhone(p.phone),
     source: "desk", payment: p.payment, food: p.food, notes: approver ? `${p.notes} [48 h rule overridden by ${approver}]`.trim() : p.notes, actor: staff.email, overridePartyLead: p.overrideLead,

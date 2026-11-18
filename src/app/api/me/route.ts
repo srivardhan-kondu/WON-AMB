@@ -9,9 +9,9 @@ export const GET = handle(async () => {
   const phone = await getCustomerPhone();
   if (!phone) throw new HttpError(401, "Verify your phone first");
   const d = db();
-  const c = d.prepare("SELECT id, name FROM customers WHERE phone = ?").get(phone) as { id: number; name: string } | undefined;
+  const c = await d.prepare("SELECT id, name FROM customers WHERE phone = ?").get(phone) as { id: number; name: string } | undefined;
   if (!c) return json({ name: "", phoneMasked: mask(phone), memberships: [], bookings: [] });
-  const memberships = d
+  const memberships = await d
     .prepare(
       `SELECT m.id, m.plan, m.valid_till, m.visits_left, (SELECT COUNT(*) FROM membership_visits v WHERE v.membership_id = m.id) AS used
        FROM memberships m WHERE m.customer_id = ? ORDER BY m.valid_till DESC`,
@@ -22,7 +22,7 @@ export const GET = handle(async () => {
      WHERE v.membership_id = ? ORDER BY v.used_at DESC LIMIT 10`,
   );
   const today = todayIST();
-  const bookings = (d
+  const bookings = (await d
     .prepare(
       `SELECT b.code, b.day, b.start_min, b.party_size, b.status, p.name AS product FROM bookings b JOIN products p ON p.id = b.product_id
        WHERE b.customer_id = ? AND b.day >= ? AND b.status IN ('hold','confirmed','arrived') ORDER BY b.day, b.start_min LIMIT 20`,
@@ -31,7 +31,9 @@ export const GET = handle(async () => {
   return json({
     name: c.name,
     phoneMasked: mask(phone),
-    memberships: memberships.map((m) => ({ ...m, active: m.valid_till >= today && (m.visits_left == null || m.visits_left > 0), recent: visits.all(m.id) })),
+    memberships: await Promise.all(
+      memberships.map(async (m) => ({ ...m, active: m.valid_till >= today && (m.visits_left == null || m.visits_left > 0), recent: await visits.all(m.id) })),
+    ),
     bookings,
   });
 });

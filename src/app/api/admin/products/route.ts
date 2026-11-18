@@ -4,5 +4,5 @@ import { listProducts } from "@/lib/repo";
 
 export const GET = handle(async () => {
   await requireStaff("desk");
-  return json({ products: listProducts(true) });
+  return json({ products: await listProducts(true) });
 });

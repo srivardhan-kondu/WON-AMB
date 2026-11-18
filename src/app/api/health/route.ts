@@ -9,9 +9,9 @@ import { INTEGRITY_DAYS, integrityLock, runIntegrityCheck } from "@/lib/integrit
  */
 export const GET = handle(async () => {
   const t = Date.now();
-  db().prepare("SELECT 1").get();
-  const problems = runIntegrityCheck("health");
-  const locked = !!integrityLock();
+  await db().prepare("SELECT 1").get();
+  const problems = await runIntegrityCheck("health");
+  const locked = !!await integrityLock();
   const ok = problems.length === 0 && !locked;
   return json({ ok, problems, bookingsPaused: locked, checkedDays: INTEGRITY_DAYS, ms: Date.now() - t }, ok ? 200 : 503);
 });

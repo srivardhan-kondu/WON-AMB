@@ -16,6 +16,6 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ code: s
   const staff = await requireStaff("manager");
   const r = await body(req, R);
   const { code } = await ctx.params;
-  const approver = approveOverride(req, staff, r.managerPin, `refund:${code}`, ["owner"]);
+  const approver = await approveOverride(req, staff, r.managerPin, `refund:${code}`, ["owner"]);
   return json(await refundBooking(code, r.amountPaise, staff.email, approver, r.reason, { cancel: r.cancel }));
 });

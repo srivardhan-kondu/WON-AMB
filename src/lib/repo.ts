@@ -20,14 +20,19 @@ export function rowToProduct(r: ProductRow): Product {
   };
 }
 
-export function listRooms(): Room[] {
-  return (db().prepare("SELECT * FROM rooms ORDER BY sort").all() as { id: string; name: string; zone: Zone; capacity: number; reset_min: number }[]).map(
-    (r) => ({ id: r.id, name: r.name, zone: r.zone, capacity: r.capacity, resetMin: r.reset_min }),
-  );
+// Rooms are fixed hardware (no API edits them), so each instance caches them briefly.
+let roomCache: { at: number; rooms: Room[] } | null = null;
+
+export async function listRooms(): Promise<Room[]> {
+  if (roomCache && Date.now() - roomCache.at < 60_000) return roomCache.rooms;
+  const rows = await db().prepare("SELECT * FROM rooms ORDER BY sort").all<{ id: string; name: string; zone: Zone; capacity: number; reset_min: number }>();
+  const rooms = rows.map((r) => ({ id: r.id, name: r.name, zone: r.zone, capacity: r.capacity, resetMin: r.reset_min }));
+  roomCache = { at: Date.now(), rooms };
+  return rooms;
 }
 
-export function listProducts(includeInactive = false): Product[] {
-  const rows = db().prepare(`SELECT * FROM products ${includeInactive ? "" : "WHERE active = 1"} ORDER BY sort`).all() as ProductRow[];
+export async function listProducts(includeInactive = false): Promise<Product[]> {
+  const rows = await db().prepare(`SELECT * FROM products ${includeInactive ? "" : "WHERE active = 1"} ORDER BY sort`).all<ProductRow>();
   return rows.map(rowToProduct);
 }
 
@@ -35,37 +40,37 @@ export function listProducts(includeInactive = false): Product[] {
  * Product as sold on `day`: the catalogue row with the latest scheduled price whose effective-from
  * date is on or before that day (§7 price editor with effective-from dates). Without a day: today's catalogue row.
  */
-export function getProduct(id: string, day?: string): Product | undefined {
-  const r = db().prepare("SELECT * FROM products WHERE id = ?").get(id) as ProductRow | undefined;
+export async function getProduct(id: string, day?: string): Promise<Product | undefined> {
+  const r = await db().prepare("SELECT * FROM products WHERE id = ?").get<ProductRow>(id);
   if (!r) return undefined;
   const p = rowToProduct(r);
   return day ? priceOn(p, day) : p;
 }
 
-export function priceOn(p: Product, day: string): Product {
-  const s = db()
+export async function priceOn(p: Product, day: string): Promise<Product> {
+  const s = await db()
     .prepare("SELECT price_paise, extra_paise FROM price_schedule WHERE product_id = ? AND effective_from <= ? ORDER BY effective_from DESC LIMIT 1")
-    .get(p.id, day) as { price_paise: number; extra_paise: number } | undefined;
+    .get<{ price_paise: number; extra_paise: number }>(p.id, day);
   return s ? { ...p, pricePaise: s.price_paise, extraPaise: s.extra_paise } : p;
 }
 
 export interface ScheduledPrice { id: number; product_id: string; effective_from: string; price_paise: number; extra_paise: number; created_by: string; created_at: number }
 
 /** Fold scheduled prices whose date has arrived into the catalogue row, so the catalogue always shows today's price. */
-export function applyDuePrices(today: string) {
+export async function applyDuePrices(today: string) {
   const d = db();
-  const due = d
+  const due = await d
     .prepare(
       `SELECT ps.* FROM price_schedule ps
        WHERE ps.effective_from <= ? AND ps.effective_from = (SELECT MAX(effective_from) FROM price_schedule x WHERE x.product_id = ps.product_id AND x.effective_from <= ?)`,
     )
-    .all(today, today) as ScheduledPrice[];
+    .all<ScheduledPrice>(today, today);
   for (const s of due) {
-    const r = d.prepare("UPDATE products SET price_paise = ?, extra_paise = ? WHERE id = ? AND (price_paise != ? OR extra_paise != ?)").run(s.price_paise, s.extra_paise, s.product_id, s.price_paise, s.extra_paise);
-    if (r.changes) audit("system", "scheduled_price_applied", `product:${s.product_id}`, { price: s.price_paise, extra: s.extra_paise, effectiveFrom: s.effective_from });
+    const r = await d.prepare("UPDATE products SET price_paise = ?, extra_paise = ? WHERE id = ? AND (price_paise != ? OR extra_paise != ?)").run(s.price_paise, s.extra_paise, s.product_id, s.price_paise, s.extra_paise);
+    if (r.changes) await audit("system", "scheduled_price_applied", `product:${s.product_id}`, { price: s.price_paise, extra: s.extra_paise, effectiveFrom: s.effective_from });
   }
   // Past schedule rows are now history; keep only the one in force (for lookups of past days) and future ones.
-  d.prepare(
+  await d.prepare(
     `DELETE FROM price_schedule WHERE effective_from < ? AND effective_from < (SELECT MAX(effective_from) FROM price_schedule x WHERE x.product_id = price_schedule.product_id AND x.effective_from <= ?)`,
   ).run(today, today);
 }
@@ -77,8 +82,8 @@ interface DayRow {
 }
 
 /** Venue-wide defaults the owner can change (stored in settings), overridden per day by day_config. */
-export function venueDefaults() {
-  const rows = db().prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[];
+export async function venueDefaults() {
+  const rows = await db().prepare("SELECT key, value FROM settings WHERE key IN ('open_min','close_min','holdback_pct','deep_clean_start','deep_clean_min','deep_clean_zone','all5_mode')").all<{ key: string; value: string }>();
   const s = Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value)]));
   return {
     openMin: (s.open_min as number) ?? 660,
@@ -91,10 +96,9 @@ export function venueDefaults() {
   };
 }
 
-export function getDayConfig(day: string): DayConfig & { peakOverride: boolean | null; hasOverride: boolean; all5Override: "rotation" | "grid" | null } {
+export async function getDayConfig(day: string): Promise<DayConfig & { peakOverride: boolean | null; hasOverride: boolean; all5Override: "rotation" | "grid" | null }> {
   const base = defaultDayConfig(day);
-  const v = venueDefaults();
-  const r = db().prepare("SELECT * FROM day_config WHERE day = ?").get(day) as DayRow | undefined;
+  const [v, r] = await Promise.all([venueDefaults(), db().prepare("SELECT * FROM day_config WHERE day = ?").get<DayRow>(day)]);
   const openMin = r?.open_min ?? v.openMin;
   const closeMin = r?.close_min ?? v.closeMin;
   let peakHours = defaultPeakHours(day, openMin, closeMin);
@@ -132,17 +136,22 @@ export interface BookingRow {
 export interface LegRow { booking_id: number; leg_no: number; room_id: string; day: string; start_min: number; end_min: number }
 
 /** Rebuild the capacity ledger for a day from bookings + legs + calendar blocks. */
-export function buildLedger(day: string, opts: { excludeBookingId?: number } = {}): Ledger {
+export async function buildLedger(day: string, opts: { excludeBookingId?: number } = {}): Promise<Ledger> {
   const d = db();
   const t = Date.now();
-  const rows = d
-    .prepare(
-      `SELECT b.id, b.product_id, b.party_size, b.status, b.hold_expires, p.shape
-       FROM bookings b JOIN products p ON p.id = b.product_id
-       WHERE b.day = ? AND b.status IN ('hold','confirmed','arrived','done')`,
-    )
-    .all(day) as { id: number; product_id: string; party_size: number; status: string; hold_expires: number | null; shape: Shape }[];
-  const legs = d.prepare("SELECT * FROM booking_legs WHERE day = ? ORDER BY booking_id, leg_no").all(day) as LegRow[];
+  const [rows, legs, blockRows, rooms, cfg] = await Promise.all([
+    d
+      .prepare(
+        `SELECT b.id, b.product_id, b.party_size, b.status, b.hold_expires, p.shape
+         FROM bookings b JOIN products p ON p.id = b.product_id
+         WHERE b.day = ? AND b.status IN ('hold','confirmed','arrived','done')`,
+      )
+      .all<{ id: number; product_id: string; party_size: number; status: string; hold_expires: number | null; shape: Shape }>(day),
+    d.prepare("SELECT * FROM booking_legs WHERE day = ? ORDER BY booking_id, leg_no").all<LegRow>(day),
+    d.prepare("SELECT * FROM calendar_blocks WHERE day = ?").all<{ room_id: string; start_min: number; end_min: number; reason: string; booking_id: number | null }>(day),
+    listRooms(),
+    getDayConfig(day),
+  ]);
   const byBooking = new Map<number, LegRow[]>();
   for (const l of legs) {
     const arr = byBooking.get(l.booking_id) ?? [];
@@ -163,33 +172,32 @@ export function buildLedger(day: string, opts: { excludeBookingId?: number } = {
       legs: (byBooking.get(r.id) ?? []).map((l) => ({ roomId: l.room_id, start: l.start_min, end: l.end_min })),
     });
   }
-  const blockRows = d.prepare("SELECT * FROM calendar_blocks WHERE day = ?").all(day) as {
-    room_id: string; start_min: number; end_min: number; reason: string; booking_id: number | null;
-  }[];
   const blocks: Block[] = blockRows
     .filter((b) => b.booking_id == null || liveIds.has(b.booking_id))
     .map((b) => ({ roomId: b.room_id, start: b.start_min, end: b.end_min, reason: b.reason }));
-  return new Ledger(listRooms(), getDayConfig(day), bookings, blocks);
+  return new Ledger(rooms, cfg, bookings, blocks);
 }
 
-export function getBookingByCode(code: string): BookingRow | undefined {
-  return db().prepare("SELECT * FROM bookings WHERE code = ?").get(code.trim().toUpperCase()) as BookingRow | undefined;
+export async function getBookingByCode(code: string): Promise<BookingRow | undefined> {
+  return db().prepare("SELECT * FROM bookings WHERE code = ?").get<BookingRow>(code.trim().toUpperCase());
 }
 
-export function getLegs(bookingId: number): LegRow[] {
-  return db().prepare("SELECT * FROM booking_legs WHERE booking_id = ? ORDER BY leg_no").all(bookingId) as LegRow[];
+export async function getLegs(bookingId: number): Promise<LegRow[]> {
+  return db().prepare("SELECT * FROM booking_legs WHERE booking_id = ? ORDER BY leg_no").all<LegRow>(bookingId);
 }
 
-export function audit(actor: string, action: string, entity: string, detail: Record<string, unknown> = {}) {
-  db().prepare("INSERT INTO events_audit (actor, action, entity, detail, at) VALUES (?, ?, ?, ?, ?)").run(actor, action, entity, JSON.stringify(detail), Date.now());
+export async function audit(actor: string, action: string, entity: string, detail: Record<string, unknown> = {}) {
+  await db().prepare("INSERT INTO events_audit (actor, action, entity, detail, at) VALUES (?, ?, ?, ?, ?)").run(actor, action, entity, JSON.stringify(detail), Date.now());
 }
 
-export function upsertCustomer(phone: string, name?: string): number {
-  const d = db();
-  const existing = d.prepare("SELECT id, name FROM customers WHERE phone = ?").get(phone) as { id: number; name: string } | undefined;
-  if (existing) {
-    if (name && name !== existing.name) d.prepare("UPDATE customers SET name = ? WHERE id = ?").run(name, existing.id);
-    return existing.id;
-  }
-  return Number(d.prepare("INSERT INTO customers (phone, name, created_at) VALUES (?, ?, ?)").run(phone, name ?? "", Date.now()).lastInsertRowid);
+/** Find-or-create by phone in one statement (safe when two requests for a new number race). */
+export async function upsertCustomer(phone: string, name?: string): Promise<number> {
+  const r = await db()
+    .prepare(
+      `INSERT INTO customers (phone, name, created_at) VALUES (?, ?, ?)
+       ON CONFLICT (phone) DO UPDATE SET name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE customers.name END
+       RETURNING id`,
+    )
+    .get<{ id: number }>(phone, name ?? "", Date.now());
+  return r!.id;
 }

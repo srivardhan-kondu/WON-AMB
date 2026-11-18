@@ -12,9 +12,9 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ code: s
   const { code } = await ctx.params;
   const c = await body(req, C);
   const { booking } = await bookingAccess(code, { t: c.t });
-  const pay = db().prepare("SELECT 1 FROM payments WHERE booking_id = ? AND provider_order_id = ?").get(booking.id, c.razorpay_order_id);
+  const pay = await db().prepare("SELECT 1 FROM payments WHERE booking_id = ? AND provider_order_id = ?").get(booking.id, c.razorpay_order_id);
   if (!pay) throw new HttpError(400, "Order does not belong to this booking");
   if (!payments().verifyCheckout(c.razorpay_order_id, c.razorpay_payment_id, c.razorpay_signature)) throw new HttpError(400, "Payment signature invalid");
   const r = await handlePaymentCaptured(c.razorpay_order_id, c.razorpay_payment_id, null, { via: "checkout" });
-  return json({ ...r, ...holdResultFor(booking.code) });
+  return json({ ...r, ...(await holdResultFor(booking.code)) });
 });

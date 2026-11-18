@@ -9,7 +9,7 @@ import { isValidDay, todayIST } from "@/lib/time";
 /** §7 product & price editor with effective-from dates. Bookings for days on/after the date are quoted at the new price. */
 export const GET = handle(async () => {
   await requireStaff("manager");
-  const rows = db().prepare("SELECT * FROM price_schedule WHERE effective_from > ? ORDER BY effective_from, product_id").all(todayIST()) as ScheduledPrice[];
+  const rows = await db().prepare("SELECT * FROM price_schedule WHERE effective_from > ? ORDER BY effective_from, product_id").all(todayIST()) as ScheduledPrice[];
   return json({ scheduled: rows });
 });
 
@@ -24,25 +24,25 @@ export const POST = handle(async (req: Request) => {
   const staff = await requireStaff("owner");
   const s = await body(req, S);
   if (!isValidDay(s.effectiveFrom)) throw new HttpError(400, "Bad date");
-  const p = getProduct(s.productId);
+  const p = await getProduct(s.productId);
   if (!p) throw new HttpError(404, "Unknown product");
   const today = todayIST();
   if (s.effectiveFrom < today) throw new HttpError(400, "Effective date can't be in the past");
-  db().prepare(
+  await db().prepare(
     `INSERT INTO price_schedule (product_id, effective_from, price_paise, extra_paise, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(product_id, effective_from) DO UPDATE SET price_paise = excluded.price_paise, extra_paise = excluded.extra_paise, created_by = excluded.created_by, created_at = excluded.created_at`,
   ).run(p.id, s.effectiveFrom, s.pricePaise, s.extraPaise ?? p.extraPaise, staff.email, Date.now());
-  audit(staff.email, "price_scheduled", `product:${p.id}`, { from: s.effectiveFrom, price: s.pricePaise, extra: s.extraPaise ?? p.extraPaise, current: p.pricePaise });
-  if (s.effectiveFrom === today) applyDuePrices(today);
+  await audit(staff.email, "price_scheduled", `product:${p.id}`, { from: s.effectiveFrom, price: s.pricePaise, extra: s.extraPaise ?? p.extraPaise, current: p.pricePaise });
+  if (s.effectiveFrom === today) await applyDuePrices(today);
   return json({ ok: true }, 201);
 });
 
 export const DELETE = handle(async (req: NextRequest) => {
   const staff = await requireStaff("owner");
   const id = Number(req.nextUrl.searchParams.get("id"));
-  const row = db().prepare("SELECT * FROM price_schedule WHERE id = ? AND effective_from > ?").get(id, todayIST()) as ScheduledPrice | undefined;
+  const row = await db().prepare("SELECT * FROM price_schedule WHERE id = ? AND effective_from > ?").get(id, todayIST()) as ScheduledPrice | undefined;
   if (!row) throw new HttpError(404, "No future price change with that id");
-  db().prepare("DELETE FROM price_schedule WHERE id = ?").run(id);
-  audit(staff.email, "price_schedule_removed", `product:${row.product_id}`, { ...row });
+  await db().prepare("DELETE FROM price_schedule WHERE id = ?").run(id);
+  await audit(staff.email, "price_schedule_removed", `product:${row.product_id}`, { ...row });
   return json({ ok: true });
 });

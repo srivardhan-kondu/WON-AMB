@@ -16,5 +16,5 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ code: s
   const w = await body(req, W);
   const { booking, staff } = await bookingAccess(code, { t: w.t, phone: w.phone });
   if (w.guests.some((g) => !g.accept)) throw new HttpError(400, "Each guest must accept the waiver");
-  return json(signWaivers(booking.code, w.guests, clientIp(req), staff ? "desk" : "online"));
+  return json(await signWaivers(booking.code, w.guests, clientIp(req), staff ? "desk" : "online"));
 });

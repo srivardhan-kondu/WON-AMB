@@ -6,7 +6,7 @@ import { saveYieldSettings, yieldSettings } from "@/lib/yield";
 
 export const GET = handle(async () => {
   await requireStaff("manager");
-  return json(yieldSettings());
+  return json(await yieldSettings());
 });
 
 const Y = z.object({
@@ -22,7 +22,7 @@ const Y = z.object({
 export const PUT = handle(async (req: Request) => {
   const staff = await requireStaff("owner");
   const y = await body(req, Y);
-  saveYieldSettings(y);
-  audit(staff.email, "yield_settings_updated", "settings", y);
-  return json(yieldSettings());
+  await saveYieldSettings(y);
+  await audit(staff.email, "yield_settings_updated", "settings", y);
+  return json(await yieldSettings());
 });

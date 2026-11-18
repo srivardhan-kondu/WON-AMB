@@ -17,7 +17,7 @@ export const POST = handle(async (req: Request) => {
   if (!pay) return json({ ok: true, ignored: true });
   if (ev.event === "payment.captured") return json(await handlePaymentCaptured(pay.order_id, pay.id, pay.amount, ev));
   if (ev.event === "payment.failed") {
-    handlePaymentFailed(pay.order_id);
+    await handlePaymentFailed(pay.order_id);
     return json({ ok: true });
   }
   return json({ ok: true, ignored: ev.event });

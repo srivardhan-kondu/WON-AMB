@@ -29,16 +29,19 @@ export interface WeekKpis {
   daily: { day: string; revenuePaise: number; bookings: number }[];
 }
 
-export function weekKpis(weekStart: string): WeekKpis {
+export async function weekKpis(weekStart: string): Promise<WeekKpis> {
   const d = db();
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const end = addDays(weekStart, 7);
-  const rooms = listRooms();
-  const products = listProducts(true);
-
-  const rows = d
-    .prepare(`SELECT product_id, status, source, party_size, price_paise, refunded_paise, day, created_at, start_min FROM bookings WHERE day >= ? AND day < ? AND status IN ${SOLD}`)
-    .all(weekStart, end) as { product_id: string; status: string; source: string; party_size: number; price_paise: number; refunded_paise: number; day: string; created_at: number; start_min: number }[];
+  const [rooms, products, rows, ledgers, rejections] = await Promise.all([
+    listRooms(),
+    listProducts(true),
+    d
+      .prepare(`SELECT product_id, status, source, party_size, price_paise, refunded_paise, day, created_at, start_min FROM bookings WHERE day >= ? AND day < ? AND status IN ${SOLD}`)
+      .all<{ product_id: string; status: string; source: string; party_size: number; price_paise: number; refunded_paise: number; day: string; created_at: number; start_min: number }>(weekStart, end),
+    Promise.all(days.map((day) => buildLedger(day))),
+    rejectionStats(weekStart, end),
+  ]);
 
   const refunds = rows.reduce((s, r) => s + r.refunded_paise, 0);
   const revenue = rows.reduce((s, r) => s + r.price_paise, 0) - refunds;
@@ -54,8 +57,7 @@ export function weekKpis(weekStart: string): WeekKpis {
   let seatMinutes = 0;
   let heldBack = 0;
   let heldBackSold = 0;
-  for (const day of days) {
-    const ledger = buildLedger(day);
+  for (const ledger of ledgers) {
     const { openMin, closeMin } = ledger.cfg;
     for (const r of rooms) {
       const hold = r.zone === "game" ? Math.floor((r.capacity * ledger.cfg.holdbackPct) / 100) : 0;
@@ -97,7 +99,7 @@ export function weekKpis(weekStart: string): WeekKpis {
     walkInShare: rows.length ? walkIns / rows.length : 0,
     walkInConversion: heldBack ? heldBackSold / heldBack : null,
     holdbackSeatHours: Math.round(heldBack / 60),
-    ...rejectionStats(weekStart, end),
+    ...rejections,
     refundsPaise: refunds,
     partyLeadDays: partyLead == null ? null : Math.round(partyLead * 10) / 10,
     byProduct: products
@@ -118,9 +120,9 @@ export function weekKpis(weekStart: string): WeekKpis {
   };
 }
 
-function rejectionStats(from: string, to: string) {
-  const r = db()
+async function rejectionStats(from: string, to: string) {
+  const r = (await db()
     .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(false_sellout), 0) AS f FROM quote_rejections WHERE day >= ? AND day < ?")
-    .get(from, to) as { n: number; f: number };
+    .get<{ n: number; f: number }>(from, to))!;
   return { rejections: r.n, falseSellouts: r.f, falseSelloutRate: r.n ? r.f / r.n : 0 };
 }
