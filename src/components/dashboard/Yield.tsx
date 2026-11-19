@@ -87,10 +87,10 @@ export function Yield() {
         ) : offers.length === 0 ? (
           <div className="text-sm text-muted">No flash prices open.</div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="data-table">
             <tbody>
               {offers.map((o) => (
-                <tr key={o.id} className="border-t border-line">
+                <tr key={o.id}>
                   <td className="py-2">{fmtDay(o.day)}</td>
                   <td>
                     {fmtMin(o.start_hour * 60)}–{fmtMin(o.end_hour * 60)}

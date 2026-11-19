@@ -7,7 +7,7 @@ export function PinDialog({ title, needReason, onSubmit, onClose, error }: { tit
   const [pin, setPin] = useState("");
   const [reason, setReason] = useState("");
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-[2px] p-4" onClick={onClose}>
       <form
         className="card w-full max-w-sm space-y-3"
         onClick={(e) => e.stopPropagation()}

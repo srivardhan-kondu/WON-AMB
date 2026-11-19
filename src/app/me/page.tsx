@@ -118,11 +118,11 @@ export default function MePage() {
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
-                  <div className={`font-mono text-2xl ${m.visits_left != null && m.visits_left <= 2 ? "text-amber" : ""}`}>{m.visits_left ?? "∞"}</div>
+                  <div className={`text-2xl font-semibold tracking-tight ${m.visits_left != null && m.visits_left <= 2 ? "text-amber" : ""}`}>{m.visits_left ?? "∞"}</div>
                   <div className="text-xs text-muted">visits left</div>
                 </div>
                 <div>
-                  <div className="font-mono text-2xl">{m.used}</div>
+                  <div className="text-2xl font-semibold tracking-tight">{m.used}</div>
                   <div className="text-xs text-muted">used</div>
                 </div>
                 <div>

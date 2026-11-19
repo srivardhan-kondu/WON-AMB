@@ -74,7 +74,7 @@ export function PartyDesk({ products }: { products: Product[] }) {
     const link = `${window.location.origin}/pay/${done.code}?t=${done.token}`;
     return (
       <div className="card max-w-lg space-y-3">
-        <div className="font-mono text-2xl">{done.code}</div>
+        <div className="text-2xl font-semibold tracking-tight">{done.code}</div>
         {done.status === "hold" ? (
           <>
             <div className="text-sm">
@@ -138,7 +138,7 @@ export function PartyDesk({ products }: { products: Product[] }) {
               <span>
                 {party} × {rupees(product.pricePaise)} @ {fmtMin(picked.start)}
               </span>
-              <b className="font-mono">{rupees(picked.pricePaise)}</b>
+              <b className="tabular-nums">{rupees(picked.pricePaise)}</b>
             </div>
             <div className="text-xs text-muted">Deposit 25%: {rupees(Math.round(picked.pricePaise * 0.25))} · setup 30 min before, teardown 15 after</div>
           </div>

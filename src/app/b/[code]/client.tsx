@@ -23,7 +23,7 @@ export default function BookingPage() {
       <div className="space-y-4">
         <div className="card text-center">
           <div className="flex items-center justify-center gap-2">
-            <span className="font-mono text-2xl font-bold tracking-wider">{b.code}</span>
+            <span className="text-2xl font-semibold tracking-tight font-bold tracking-wider">{b.code}</span>
             <StatusChip status={b.status} />
           </div>
           {b.status === "confirmed" || b.status === "arrived" ? (

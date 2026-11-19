@@ -39,9 +39,9 @@ export function ProductsEditor() {
     <div className="space-y-3">
       {!owner && <div className="text-sm text-muted">Only the owner can change prices.</div>}
       <ErrorNote error={err} />
-      <div className="overflow-x-auto rounded-2xl border border-line">
-        <table className="w-full text-sm">
-          <thead className="bg-panel text-left text-xs uppercase text-muted">
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
             <tr>
               <th className="px-3 py-2">Product</th>
               <th className="px-3 py-2">Shape</th>
@@ -55,7 +55,7 @@ export function ProductsEditor() {
             {products.map((p) => {
               const e = edits[p.id];
               return (
-                <tr key={p.id} className="border-t border-line">
+                <tr key={p.id}>
                   <td className="px-3 py-2">
                     {p.name}
                     <div className="text-xs text-muted">
@@ -129,13 +129,13 @@ function ScheduledPrices({ products, owner }: { products: Product[]; owner: bool
       ) : rows.length === 0 ? (
         <div className="text-sm text-muted">None scheduled.</div>
       ) : (
-        <table className="w-full text-sm">
+        <table className="data-table">
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-line">
+              <tr key={r.id}>
                 <td className="py-1.5">{products.find((x) => x.id === r.product_id)?.name ?? r.product_id}</td>
                 <td>from {fmtDay(r.effective_from)}</td>
-                <td className="font-mono text-cyan">
+                <td className="font-medium tabular-nums">
                   {rupees(r.price_paise)}
                   {r.extra_paise ? ` (+${rupees(r.extra_paise)}/extra)` : ""}
                 </td>
@@ -224,9 +224,9 @@ export function Memberships() {
       {!rows ? (
         <Spinner />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-line">
-          <table className="w-full text-sm">
-            <thead className="bg-panel text-left text-xs uppercase text-muted">
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
               <tr>
                 <th className="px-3 py-2">Member</th>
                 <th className="px-3 py-2">Plan</th>
@@ -237,7 +237,7 @@ export function Memberships() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} className="border-t border-line">
+                <tr key={r.id}>
                   <td className="px-3 py-2">
                     {r.name} <span className="text-xs text-muted">{r.phone}</span>
                   </td>

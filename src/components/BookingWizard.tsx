@@ -165,7 +165,7 @@ export default function BookingWizard() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="font-semibold">{p.name}</div>
-                <div className="whitespace-nowrap font-mono text-sm text-cyan">{priceLabel(p)}</div>
+                <div className="whitespace-nowrap text-sm font-semibold tabular-nums text-pink">{priceLabel(p)}</div>
               </div>
               <div className="mt-1 text-sm text-muted">{p.description}</div>
             </button>
@@ -264,8 +264,8 @@ export default function BookingWizard() {
                     {i === 0 && <span className="chip border-pink/50 text-pink">best match</span>}
                     {o.flash && <span className="chip border-amber/60 text-amber">flash price</span>}
                     {!o.peak && !o.flash && <span className="chip border-lime/50 text-lime">off-peak · quieter</span>}
-                    {o.basePricePaise && <span className="font-mono text-xs text-muted line-through">{rupees(o.basePricePaise)}</span>}
-                    <span className="font-mono text-cyan">{rupees(o.pricePaise)}</span>
+                    {o.basePricePaise && <span className="text-xs tabular-nums text-muted line-through">{rupees(o.basePricePaise)}</span>}
+                    <span className="font-semibold tabular-nums">{rupees(o.pricePaise)}</span>
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-muted">
@@ -331,7 +331,7 @@ export default function BookingWizard() {
                   <span>
                     {product.name} × {party} · {fmtDay(day)}, {fmtMin(picked.start)}
                   </span>
-                  <b className="font-mono">{rupees(picked.pricePaise)}</b>
+                  <b className="tabular-nums">{rupees(picked.pricePaise)}</b>
                 </div>
                 <div className="mt-1 text-xs text-muted">Incl. GST · Non-refundable · One free reschedule up to 24 h before · Waivers required for every guest</div>
               </div>

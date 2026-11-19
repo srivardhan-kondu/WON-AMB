@@ -86,7 +86,7 @@ function Runsheet() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3">
         <input type="date" className="input w-auto" value={day} onChange={(e) => setDay(e.target.value)} />
-        {isToday && <span className="font-mono text-2xl">{fmtClock(nowSec)}</span>}
+        {isToday && <span className="text-2xl font-semibold tracking-tight">{fmtClock(nowSec)}</span>}
         <span className={`chip ${live ? "border-lime/50 text-lime" : "border-red/50 text-red"}`}>{live ? "live" : "reconnecting"}</span>
         <button className="btn btn-sm no-print ml-auto" onClick={() => window.print()}>
           Print
@@ -112,7 +112,7 @@ function Runsheet() {
                 {block ? (
                   <div className="text-sm">
                     <div className="text-muted">{block.reason}</div>
-                    <div className="font-mono text-2xl">{fmtCountdown(secsLeft)}</div>
+                    <div className="text-2xl font-semibold tracking-tight">{fmtCountdown(secsLeft)}</div>
                   </div>
                 ) : curr.length ? (
                   <div className="space-y-1 text-sm">
@@ -122,7 +122,7 @@ function Runsheet() {
                       </div>
                     ))}
                     <div className="text-xs text-muted">changeover in</div>
-                    <div className="font-mono text-2xl text-cyan">{fmtCountdown(secsLeft)}</div>
+                    <div className="text-2xl font-semibold tracking-tight text-cyan">{fmtCountdown(secsLeft)}</div>
                   </div>
                 ) : (
                   <div className="text-sm text-muted">Free{nextStart != null ? ` · next ${fmtMin(nextStart)}` : ""}</div>
@@ -135,7 +135,7 @@ function Runsheet() {
       )}
 
       {/* Timeline */}
-      <div className="overflow-x-auto rounded-2xl border border-line bg-panel">
+      <div className="table-wrap">
         <div className="relative min-w-[1800px] p-3">
           <div className="relative ml-28 h-6 text-xs text-muted">
             {Array.from({ length: Math.ceil(span / 60) + 1 }, (_, i) => sheet.openMin + i * 60).filter((m) => m <= sheet.closeMin).map((m) => (
@@ -210,8 +210,8 @@ function RotationSquare({ hour, sheet }: { hour: number; sheet: Sheet }) {
   return (
     <div className="card">
       <div className="mb-2 font-semibold">Rotation Hour {fmtMin(start)} · everyone shifts one room every 12 min</div>
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-muted">
+      <table className="data-table">
+        <thead>
           <tr>
             <th className="py-1">Group</th>
             {legStarts.map((s) => (
@@ -223,7 +223,7 @@ function RotationSquare({ hour, sheet }: { hour: number; sheet: Sheet }) {
         </thead>
         <tbody>
           {[...groups].map(([code, g]) => (
-            <tr key={code} className="border-t border-line">
+            <tr key={code}>
               <td className="py-1.5">
                 <span className="font-mono">{code}</span> <span className="text-muted">{g.name} ×{g.party}</span>
               </td>

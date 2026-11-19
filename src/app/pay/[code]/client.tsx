@@ -98,7 +98,7 @@ export default function PayPage() {
       currency: "INR",
       name: "World of Neon",
       description: `${booking.product.name} · ${booking.code}`,
-      theme: { color: "#ff3ea5" },
+      theme: { color: "#db2777" },
       handler: async (r: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => {
         setBusy(true);
         try {
@@ -131,7 +131,7 @@ export default function PayPage() {
         </div>
         <div className="flex items-baseline justify-between rounded-xl bg-panel-2 p-3">
           <span>{booking.depositPaise > 0 ? "Deposit due now (25%)" : "Total (incl. GST)"}</span>
-          <span className="font-mono text-2xl text-cyan">{rupees(hold.amountDuePaise)}</span>
+          <span className="text-2xl font-semibold tracking-tight text-cyan">{rupees(hold.amountDuePaise)}</span>
         </div>
         <ErrorNote error={err} />
         {expired ? (
@@ -144,7 +144,7 @@ export default function PayPage() {
           </button>
         ) : (
           <div className="space-y-2">
-            <div className="rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber">
+            <div className="rounded-lg border border-amber/20 bg-amber/5 px-3 py-2 text-xs text-amber">
               Test mode — no Razorpay keys configured. These buttons simulate the gateway webhook.
             </div>
             <button className="btn btn-primary w-full py-3 text-base" disabled={busy} onClick={() => payMock("success")}>

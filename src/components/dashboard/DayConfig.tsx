@@ -116,7 +116,7 @@ export function DayConfigEditor() {
               {Array.from({ length: Math.ceil((cfg.closeMin - cfg.openMin) / 60) }, (_, i) => Math.floor(cfg.openMin / 60) + i).map((h) => {
                 const on = cfg.rotationHours.includes(h);
                 return (
-                  <button key={h} className={`btn btn-sm ${on ? "border-fuchsia-400 text-fuchsia-300" : ""}`} onClick={() => setCfg({ ...cfg, rotationHours: on ? cfg.rotationHours.filter((x) => x !== h) : [...cfg.rotationHours, h].sort((a, b) => a - b) })}>
+                  <button key={h} className={`btn btn-sm ${on ? "border-violet text-violet" : ""}`} onClick={() => setCfg({ ...cfg, rotationHours: on ? cfg.rotationHours.filter((x) => x !== h) : [...cfg.rotationHours, h].sort((a, b) => a - b) })}>
                     {fmtMin(h * 60)}
                   </button>
                 );
@@ -235,10 +235,10 @@ function DayBlocks({ day }: { day: string }) {
       ) : blocks.length === 0 ? (
         <div className="text-sm text-muted">No manual blocks.</div>
       ) : (
-        <table className="w-full text-sm">
+        <table className="data-table">
           <tbody>
             {blocks.map((b) => (
-              <tr key={b.id} className="border-t border-line">
+              <tr key={b.id}>
                 <td className="py-1.5">{roomName(b.room_id)}</td>
                 <td className="font-mono">
                   {fmtMin(b.start_min)}–{fmtMin(b.end_min)}

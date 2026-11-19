@@ -13,25 +13,35 @@ export function Logo({ sub }: { sub?: string }) {
 }
 
 const STATUS_STYLE: Record<string, string> = {
-  hold: "border-amber/50 text-amber",
-  confirmed: "border-cyan/50 text-cyan",
-  arrived: "border-lime/50 text-lime",
-  done: "border-line text-muted",
-  no_show: "border-red/50 text-red",
-  cancelled: "border-red/30 text-red/70",
-  expired: "border-line text-muted",
-  waiting: "border-amber/50 text-amber",
-  offered: "border-cyan/50 text-cyan",
-  accepted: "border-lime/50 text-lime",
+  hold: "border-amber/20 bg-amber/10 text-amber",
+  confirmed: "border-cyan/20 bg-cyan/10 text-cyan",
+  arrived: "border-lime/20 bg-lime/10 text-lime",
+  done: "border-line bg-panel-2 text-muted",
+  no_show: "border-red/20 bg-red/10 text-red",
+  cancelled: "border-line bg-panel-2 text-muted line-through",
+  expired: "border-line bg-panel-2 text-muted",
+  waiting: "border-amber/20 bg-amber/10 text-amber",
+  offered: "border-cyan/20 bg-cyan/10 text-cyan",
+  accepted: "border-lime/20 bg-lime/10 text-lime",
+  mock: "border-line bg-panel-2 text-muted",
+  sent: "border-lime/20 bg-lime/10 text-lime",
+  failed: "border-red/20 bg-red/10 text-red",
 };
 
+const STATUS_LABEL: Record<string, string> = { hold: "awaiting payment", arrived: "checked in", no_show: "no-show" };
+
 export function StatusChip({ status }: { status: string }) {
-  return <span className={`chip ${STATUS_STYLE[status] ?? "border-line text-muted"}`}>{status.replace("_", "-")}</span>;
+  return (
+    <span className={`chip ${STATUS_STYLE[status] ?? "border-line bg-panel-2 text-muted"}`}>
+      <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current" />
+      {STATUS_LABEL[status] ?? status.replace("_", " ")}
+    </span>
+  );
 }
 
 export function ErrorNote({ error }: { error: string | null | undefined }) {
   if (!error) return null;
-  return <div className="rounded-xl border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{error}</div>;
+  return <div className="rounded-lg border border-red/20 bg-red/5 px-3 py-2 text-sm text-red">{error}</div>;
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
@@ -46,12 +56,12 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 
 export function Stepper({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (n: number) => void }) {
   return (
-    <div className="inline-flex items-center rounded-xl border border-line bg-background">
-      <button type="button" className="px-3 py-2 text-lg disabled:opacity-30" disabled={value <= min} onClick={() => onChange(value - 1)} aria-label="fewer">
+    <div className="inline-flex items-center rounded-lg border border-line bg-panel shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+      <button type="button" className="px-3 py-1.5 text-base text-muted hover:text-foreground disabled:opacity-30" disabled={value <= min} onClick={() => onChange(value - 1)} aria-label="fewer">
         −
       </button>
-      <span className="w-10 text-center font-mono text-lg">{value}</span>
-      <button type="button" className="px-3 py-2 text-lg disabled:opacity-30" disabled={value >= max} onClick={() => onChange(value + 1)} aria-label="more">
+      <span className="w-10 text-center text-base font-semibold">{value}</span>
+      <button type="button" className="px-3 py-1.5 text-base text-muted hover:text-foreground disabled:opacity-30" disabled={value >= max} onClick={() => onChange(value + 1)} aria-label="more">
         +
       </button>
     </div>

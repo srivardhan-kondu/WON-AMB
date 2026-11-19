@@ -33,10 +33,14 @@ export default function StaffLogin() {
 
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-4">
-      <div className="mb-6">
-        <Logo sub="Staff" />
+      <div className="mb-6 text-center">
+        <div className="inline-block">
+          <Logo sub="Staff console" />
+        </div>
+        <h1 className="mt-6 text-xl font-semibold">Sign in to your account</h1>
+        <p className="mt-1 text-sm text-muted">Front desk, floor team and managers</p>
       </div>
-      <form className="card space-y-4" onSubmit={login}>
+      <form className="card space-y-4 p-6" onSubmit={login}>
         <Field label="Email">
           <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
@@ -49,7 +53,7 @@ export default function StaffLogin() {
           </Field>
         )}
         <ErrorNote error={err} />
-        <button className="btn btn-primary w-full" disabled={busy || !email || !password || (needTotp && totp.length !== 6)}>
+        <button className="btn btn-primary w-full py-2.5" disabled={busy || !email || !password || (needTotp && totp.length !== 6)}>
           Log in
         </button>
       </form>

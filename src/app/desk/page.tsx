@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { StaffShell } from "@/components/StaffShell";
+import { useRouter, useSearchParams } from "next/navigation";
+import { DESK_TABS, StaffShell, useTab } from "@/components/StaffShell";
 import { CheckIn } from "@/components/desk/CheckIn";
 import { PartyDesk } from "@/components/desk/PartyDesk";
 import { TodayBoard } from "@/components/desk/TodayBoard";
@@ -10,8 +11,6 @@ import { StatusChip } from "@/components/ui";
 import type { Product, Room } from "@/lib/engine/types";
 import { api } from "@/lib/client";
 import { fmtMin, todayIST } from "@/lib/time";
-
-const TABS = ["Today", "Walk-in", "Check-in", "Party", "Waitlist"] as const;
 
 export default function DeskPage() {
   return (
@@ -22,10 +21,12 @@ export default function DeskPage() {
 }
 
 function Desk() {
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Today");
+  const tab = useTab(DESK_TABS);
+  const router = useRouter();
+  const checkinCode = useSearchParams().get("code") ?? undefined;
   const [products, setProducts] = useState<Product[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [checkinCode, setCheckinCode] = useState<string | undefined>();
+  const goCheckIn = (code: string) => router.push(`/desk?tab=checkin&code=${encodeURIComponent(code)}`);
 
   useEffect(() => {
     api<{ products: Product[] }>("/api/admin/products").then((d) => setProducts(d.products));
@@ -34,18 +35,11 @@ function Desk() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1">
-        {TABS.map((t) => (
-          <button key={t} className={`tab ${tab === t ? "tab-active" : ""}`} onClick={() => { setTab(t); if (t !== "Check-in") setCheckinCode(undefined); }}>
-            {t}
-          </button>
-        ))}
-      </div>
-      {tab === "Today" && <TodayBoard onCheckIn={(c) => { setCheckinCode(c); setTab("Check-in"); }} />}
-      {tab === "Walk-in" && <WalkIn products={products} rooms={rooms} onCheckIn={(c) => { setCheckinCode(c); setTab("Check-in"); }} />}
-      {tab === "Check-in" && <CheckIn initial={checkinCode} />}
-      {tab === "Party" && <PartyDesk products={products} />}
-      {tab === "Waitlist" && <Waitlist products={products} />}
+      {tab === "today" && <TodayBoard onCheckIn={goCheckIn} />}
+      {tab === "walkin" && <WalkIn products={products} rooms={rooms} onCheckIn={goCheckIn} />}
+      {tab === "checkin" && <CheckIn key={checkinCode ?? ""} initial={checkinCode} />}
+      {tab === "party" && <PartyDesk products={products} />}
+      {tab === "waitlist" && <Waitlist products={products} />}
     </div>
   );
 }
@@ -59,9 +53,9 @@ function Waitlist({ products }: { products: Product[] }) {
   return (
     <div className="space-y-3">
       <input type="date" className="input w-auto" value={day} onChange={(e) => setDay(e.target.value)} />
-      <div className="overflow-hidden rounded-2xl border border-line">
-        <table className="w-full text-sm">
-          <thead className="bg-panel text-left text-xs uppercase text-muted">
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
             <tr>
               <th className="px-3 py-2">Hour</th>
               <th className="px-3 py-2">Guest</th>
@@ -72,7 +66,7 @@ function Waitlist({ products }: { products: Product[] }) {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id} className="border-t border-line">
+              <tr key={r.id}>
                 <td className="px-3 py-2 font-mono">{fmtMin(r.hour * 60)}</td>
                 <td className="px-3 py-2">
                   {r.name} <span className="text-xs text-muted">{r.phone}</span>

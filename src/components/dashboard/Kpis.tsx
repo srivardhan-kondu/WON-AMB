@@ -33,8 +33,8 @@ function Tile({ label, value, prev, fmt, invert }: { label: string; value: numbe
   const good = delta == null ? null : invert ? delta < 0 : delta > 0;
   return (
     <div className="card p-4">
-      <div className="text-xs uppercase tracking-wider text-muted">{label}</div>
-      <div className="mt-1 font-mono text-2xl">{fmt(value)}</div>
+      <div className="text-xs font-medium text-muted">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight">{fmt(value)}</div>
       <div className={`text-xs ${good == null ? "text-muted" : good ? "text-lime" : "text-red"}`}>
         {delta == null ? `last week ${fmt(prev)}` : `${delta > 0 ? "▲" : "▼"} ${Math.abs(Math.round(delta * 100))}% vs ${fmt(prev)}`}
       </div>
@@ -81,42 +81,45 @@ export function Kpis() {
         <Tile label="No-show rate" value={c.noShowRate} prev={p.noShowRate} fmt={pct} invert />
         <Tile label="Walk-in / desk share" value={c.walkInShare} prev={p.walkInShare} fmt={pct} />
         <div className="card p-4">
-          <div className="text-xs uppercase tracking-wider text-muted">Walk-in conversion</div>
-          <div className="mt-1 font-mono text-2xl">{c.walkInConversion == null ? "—" : pct(c.walkInConversion)}</div>
+          <div className="text-xs font-medium text-muted">Walk-in conversion</div>
+          <div className="mt-1 text-2xl font-semibold tracking-tight">{c.walkInConversion == null ? "—" : pct(c.walkInConversion)}</div>
           <div className="text-xs text-muted">
             held-back seats sold · {c.holdbackSeatHours} seat-h held · last week {p.walkInConversion == null ? "—" : pct(p.walkInConversion)}
           </div>
         </div>
         <div className={`card p-4 ${c.falseSellouts > 0 ? "border-red/60" : ""}`}>
-          <div className="text-xs uppercase tracking-wider text-muted">False sell-out rate</div>
-          <div className={`mt-1 font-mono text-2xl ${c.falseSellouts > 0 ? "text-red" : "text-lime"}`}>{pct(c.falseSelloutRate)}</div>
+          <div className="text-xs font-medium text-muted">False sell-out rate</div>
+          <div className={`mt-1 text-2xl font-semibold tracking-tight ${c.falseSellouts > 0 ? "text-red" : "text-lime"}`}>{pct(c.falseSelloutRate)}</div>
           <div className="text-xs text-muted">
             {c.falseSellouts} of {c.rejections} rejected searches · must stay 0
           </div>
         </div>
         <Tile label="Refunds (owner-approved)" value={c.refundsPaise} prev={p.refundsPaise} fmt={rupees} invert />
         <div className="card p-4">
-          <div className="text-xs uppercase tracking-wider text-muted">Party lead time</div>
-          <div className="mt-1 font-mono text-2xl">{c.partyLeadDays == null ? "—" : `${c.partyLeadDays} d`}</div>
+          <div className="text-xs font-medium text-muted">Party lead time</div>
+          <div className="mt-1 text-2xl font-semibold tracking-tight">{c.partyLeadDays == null ? "—" : `${c.partyLeadDays} d`}</div>
           <div className="text-xs text-muted">last week {p.partyLeadDays == null ? "—" : `${p.partyLeadDays} d`}</div>
         </div>
       </div>
-      {c.falseSellouts > 0 && <div className="rounded-xl border border-red/40 bg-red/10 p-3 text-sm text-red">A search was refused while rooms could have seated it. This is an engine bug: check the server log for &quot;FALSE SELL-OUT&quot;.</div>}
+      {c.falseSellouts > 0 && <div className="rounded-lg border border-red/20 bg-red/5 p-3 text-sm text-red">A search was refused while rooms could have seated it. This is an engine bug: check the server log for &quot;FALSE SELL-OUT&quot;.</div>}
       {c.walkInConversion != null && c.walkInConversion < 0.3 && c.holdbackSeatHours > 0 && (
-        <div className="rounded-xl border border-amber/40 bg-amber/10 p-3 text-sm text-amber">
+        <div className="rounded-lg border border-amber/20 bg-amber/5 p-3 text-sm text-amber">
           Only {pct(c.walkInConversion)} of the {c.holdbackSeatHours} held-back seat-hours sold: consider lowering hold-back % in Day config.
         </div>
       )}
-      {c.noShowRate > 0.08 && <div className="rounded-xl border border-amber/40 bg-amber/10 p-3 text-sm text-amber">No-show rate above 8% — consider tighter reminders or deposits.</div>}
+      {c.noShowRate > 0.08 && <div className="rounded-lg border border-amber/20 bg-amber/5 p-3 text-sm text-amber">No-show rate above 8% — consider tighter reminders or deposits.</div>}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card">
           <div className="mb-3 text-sm font-semibold">Revenue by day</div>
           <div className="flex h-40 items-end gap-2">
             {c.daily.map((d) => (
-              <div key={d.day} className="flex flex-1 flex-col items-center gap-1">
-                <div className="w-full rounded-t bg-gradient-to-t from-pink to-fuchsia-400" style={{ height: `${(d.revenuePaise / maxRev) * 100}%`, minHeight: d.revenuePaise ? 2 : 0 }} title={rupees(d.revenuePaise)} />
-                <div className="text-[10px] text-muted">{fmtDay(d.day).split(",")[0]}</div>
+              <div key={d.day} className="flex h-full flex-1 flex-col items-center gap-1">
+                <div className="flex w-full flex-1 flex-col items-center justify-end">
+                  {d.revenuePaise > 0 && <div className="mb-1 text-[10px] font-medium text-muted">{rupees(d.revenuePaise)}</div>}
+                  <div className="w-full max-w-10 rounded-t-md bg-gradient-to-t from-pink to-violet" style={{ height: `${(d.revenuePaise / maxRev) * 80}%`, minHeight: d.revenuePaise ? 3 : 0 }} title={rupees(d.revenuePaise)} />
+                </div>
+                <div className="text-[11px] text-muted">{fmtDay(d.day).split(",")[0]}</div>
               </div>
             ))}
           </div>
@@ -140,7 +143,7 @@ export function Kpis() {
                   <td className="py-1 pr-2 capitalize">{z}</td>
                   {c.hourly.map((h) => (
                     <td key={h.hour} className="p-0.5">
-                      <div className="h-6 rounded" style={{ background: `rgba(34,227,255,${0.08 + h[z] * 0.9})` }} title={pct(h[z])} />
+                      <div className="h-6 rounded" style={{ background: `rgba(14,116,144,${0.06 + h[z] * 0.85})` }} title={pct(h[z])} />
                     </td>
                   ))}
                 </tr>
@@ -153,8 +156,8 @@ export function Kpis() {
 
       <div className="card">
         <div className="mb-2 text-sm font-semibold">By product</div>
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-muted">
+        <table className="data-table">
+          <thead>
             <tr>
               <th className="py-1">Product</th>
               <th>Bookings</th>
@@ -164,11 +167,11 @@ export function Kpis() {
           </thead>
           <tbody>
             {c.byProduct.map((r) => (
-              <tr key={r.id} className="border-t border-line">
+              <tr key={r.id}>
                 <td className="py-1.5">{r.name}</td>
                 <td>{r.bookings}</td>
                 <td>{r.guests}</td>
-                <td className="text-right font-mono">{rupees(r.revenuePaise)}</td>
+                <td className="text-right font-medium tabular-nums">{rupees(r.revenuePaise)}</td>
               </tr>
             ))}
             {c.byProduct.length === 0 && (
