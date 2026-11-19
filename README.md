@@ -1,11 +1,13 @@
 # WON — World of Neon booking system
 
-A full-stack Next.js build of the two design docs in the parent folder: one scheduling engine and four apps on top of it.
+A full-stack Next.js build of the two design docs in the parent folder: one scheduling engine and the staff apps on top of it.
+
+**Bookings are made only at the front desk.** There is no public booking site: `/` opens the desk (staff login), and every quote and booking API needs a staff session. Guests only receive links the desk sends them: the pay link, their ticket/QR, waivers and the invoice.
 
 | App | URL | Who |
 | --- | --- | --- |
-| Booking site | `/` → `/pay/[code]` → `/b/[code]` (QR, guest list), plus `/w/[code]` (waivers), `/b/[code]/reschedule`, `/invoice/[code]`, `/waitlist/[token]`, `/me` (OTP: memberships + upcoming bookings) | Customers |
-| Front desk | `/desk` (Today board, Walk-in, Check-in with QR camera, Party desk, Waitlist) | desk, manager, owner |
+| Guest links (sent by the desk) | `/pay/[code]` (UPI pay link), `/b/[code]` (ticket, QR, guest list), `/w/[code]` (waivers), `/invoice/[code]` | Guests |
+| Front desk | `/desk` (New booking, Today's bookings, Check-in with QR camera, Parties) | desk, manager, owner |
 | Runsheet | `/runsheet` (live over SSE: now/next per room, changeover countdowns, cleanup timers, timeline, Rotation-Hour Latin squares) | floor and up |
 | Owner dashboard | `/dashboard` (KPIs week vs last, day config + room blocks, prices + scheduled price changes, yield, refunds and GST export, memberships, audit feed, WhatsApp outbox, integrity) | manager, owner |
 | Staff account | `/account` (authenticator-app 2FA, override PIN, password) | all staff |
@@ -34,7 +36,7 @@ npm run simulate       # simulated Saturday + engine invariants (no server neede
 npm run typecheck
 npm run lint
 npm run backup && npm run restore-test   # pg_dump the DB, then prove the newest backup restores (needs pg_dump 18)
-# end-to-end (122 checks) against a running server, on a THROWAWAY database (never production):
+# end-to-end (114 checks) against a running server, on a THROWAWAY database (never production):
 DATABASE_URL=$E2E_URL npm run build && DATABASE_URL=$E2E_URL npm start
 npm run test:e2e -- http://localhost:3000 "$E2E_URL"
 ```
@@ -50,14 +52,13 @@ The e2e suite covers:
 - Walk-in plus check-in with the waiver gate and party shrink
 - Party exclusive blocks and the 48 h rule
 - Day config, hold-back, price edits, KPIs and the runsheet
-- OTP reschedule (once only, 24 h rule)
-- Waitlist auto-offer on cancellation
+- Desk-only booking: the old customer routes are gone and quotes need a staff login
 - Manager-PIN overrides (cancel, comp, short-notice party) attributed to the right approver
 - Flash prices (off-peak only, charged at hold)
 - Member peak-hour horizon
 - Staff TOTP login
 - GST CSV export and the `/api/health` ledger check
-- Guest-list edits, the customer `/me` view, per-phone OTP limits
+- Guest-list edits, desk guest lookup (returning guest name + membership)
 - Manual room blocks, scheduled price changes, All 5 as 5 × 20 min
 - Rejection logging (false sell-outs = 0), owner-only refunds
 - Crash recovery: a corrupted row pauses bookings until a re-check passes
@@ -133,7 +134,6 @@ Keep `won-app` at **one instance**. The commit lock and the runsheet feed are in
 
 - Moving the DB to Postgres. Only needed past single-server scale.
 - Sentry error tracking. Add a DSN and `onRequestError` in `src/instrumentation.ts`.
-- Booking a member visit online. Members book at the desk, where the visit is used at check-in. `/me` shows what's left.
 - Not code: an OpenAPI spec, the 10× load test, staff training notes, a staging copy, and Cloudflare in front.
 
 ## Deploying on Vercel

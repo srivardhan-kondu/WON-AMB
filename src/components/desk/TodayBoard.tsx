@@ -48,20 +48,9 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
     return () => clearInterval(i);
   }, [load]);
 
-  async function act(code: string, action: "no-show" | "cancel") {
-    if (action === "cancel") {
-      setCancelling(code);
-      setPinErr(null);
-      return;
-    }
-    const reason = prompt("Reason for no-show (optional):", "manual");
-    if (reason == null) return;
-    try {
-      await api(`/api/bookings/${code}/no-show`, { body: { reason } });
-      load();
-    } catch (e) {
-      setErr((e as Error).message);
-    }
+  function askCancel(code: string) {
+    setCancelling(code);
+    setPinErr(null);
   }
 
   async function cancelWithPin(pin: string, reason: string) {
@@ -110,7 +99,7 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
         <div className="tabbar">
           {STATUS_FILTERS.map(([k, label, fn]) => (
             <button key={k} className={`tab ${status === k ? "tab-active" : ""}`} onClick={() => setStatus(k)}>
-              {label} <span className="ml-1 text-xs text-muted">{rows.filter(fn).length}</span>
+              {label} <span className="ml-1 text-sm text-muted">{rows.filter(fn).length}</span>
             </button>
           ))}
         </div>
@@ -133,11 +122,9 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
               <th>Time</th>
               <th>Guest</th>
               <th>Experience</th>
-              <th className="text-center">Party</th>
-              <th>Waivers</th>
+              <th>Guests</th>
               <th>Payment</th>
               <th>Status</th>
-              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -145,53 +132,38 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
               <tr key={r.code}>
                 <td className="whitespace-nowrap">
                   <div className="font-semibold">{fmtMin(r.start_min)}</div>
-                  <div className="text-xs text-muted">to {fmtMin(r.end_min)}</div>
+                  <div className="text-sm text-muted">to {fmtMin(r.end_min)}</div>
                 </td>
                 <td>
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-panel-2 text-xs font-semibold text-muted">
-                      {(r.name || "?").slice(0, 1).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-medium">{r.name || "—"}</div>
-                      <div className="text-xs text-muted">
-                        <span className="font-mono">{r.code}</span> · {r.phone}
-                      </div>
-                    </div>
+                  <div className="font-medium">{r.name || "—"}</div>
+                  <div className="whitespace-nowrap text-sm text-muted">
+                    <span className="font-mono">{r.code}</span> · {r.phone?.replace(/^\+91/, "")}
                   </div>
                 </td>
                 <td>
                   <div>{r.product}</div>
-                  <div className="max-w-[240px] truncate text-xs text-muted" title={r.rooms ?? ""}>
+                  <div className="max-w-[200px] truncate text-sm text-muted" title={r.rooms ?? ""}>
                     {r.rooms}
                   </div>
                   {r.food ? <span className="chip mt-1 border-amber/20 bg-amber/10 text-amber">food add-on</span> : null}
                 </td>
-                <td className="text-center font-medium">{r.party_size}</td>
                 <td>
                   <WaiverBar signed={r.waivers} party={r.party_size} />
                 </td>
                 <td className="whitespace-nowrap">
                   <div className="font-medium">{rupees(r.paid_paise)}</div>
-                  <div className="text-xs text-muted">{PAY_LABEL[r.payment_method ?? ""] ?? r.payment_method ?? "—"}</div>
+                  <div className="text-sm text-muted">{PAY_LABEL[r.payment_method ?? ""] ?? r.payment_method ?? "—"}</div>
                 </td>
-                <td>
+                <td className="whitespace-nowrap">
                   <StatusChip status={r.status} />
-                </td>
-                <td className="whitespace-nowrap text-right">
-                  <div className="inline-flex gap-1.5">
+                  <div className="mt-2 flex flex-col gap-1.5 empty:hidden">
                     {(r.status === "confirmed" || r.status === "no_show") && day === todayIST() && (
                       <button className="btn btn-sm btn-cyan" onClick={() => onCheckIn(r.code)}>
                         Check in
                       </button>
                     )}
-                    {r.status === "confirmed" && (
-                      <button className="btn btn-sm" onClick={() => act(r.code, "no-show")}>
-                        No-show
-                      </button>
-                    )}
                     {(r.status === "confirmed" || r.status === "hold") && (
-                      <button className="btn btn-sm btn-danger" onClick={() => act(r.code, "cancel")}>
+                      <button className="btn btn-sm btn-danger" onClick={() => askCancel(r.code)}>
                         Cancel
                       </button>
                     )}
@@ -201,7 +173,7 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
             ))}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-muted">
+                <td colSpan={6} className="py-12 text-center text-muted">
                   <Icon name="calendar" className="mx-auto mb-2 h-8 w-8 text-gray-300" />
                   No bookings{filter || status !== "all" ? " match these filters" : " for this day yet"}.
                 </td>
@@ -219,9 +191,9 @@ const PAY_LABEL: Record<string, string> = { cash: "Cash", upi_counter: "UPI at c
 function Stat({ label, value, hint, tone }: { label: string; value: string | number; hint?: string; tone?: "lime" | "amber" }) {
   return (
     <div className="stat">
-      <div className="text-xs font-medium text-muted">{label}</div>
+      <div className="text-sm font-medium text-muted">{label}</div>
       <div className={`mt-1 text-2xl font-semibold tracking-tight ${tone === "lime" ? "text-lime" : tone === "amber" ? "text-amber" : ""}`}>{value}</div>
-      {hint && <div className="mt-0.5 text-[11px] text-muted">{hint}</div>}
+      {hint && <div className="mt-0.5 text-xs text-muted">{hint}</div>}
     </div>
   );
 }
@@ -230,8 +202,11 @@ function WaiverBar({ signed, party }: { signed: number; party: number }) {
   const ok = signed >= party;
   return (
     <div className="w-24">
-      <div className={`text-xs font-medium ${ok ? "text-lime" : "text-amber"}`}>
-        {Math.min(signed, party)}/{party} signed
+      <div className="font-semibold">
+        {party} {party === 1 ? "guest" : "guests"}
+      </div>
+      <div className={`text-sm font-medium ${ok ? "text-lime" : "text-amber"}`}>
+        {Math.min(signed, party)}/{party} waivers
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-panel-2">
         <div className={`h-full rounded-full ${ok ? "bg-lime" : "bg-amber"}`} style={{ width: `${Math.min(100, (signed / Math.max(1, party)) * 100)}%` }} />

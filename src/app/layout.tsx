@@ -6,8 +6,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "WON — World of Neon · Book your slot",
-  description: "Book games and the Neon Splatter Zone at World of Neon, Level 6, AMB Mall.",
+  title: "WON — Front desk",
+  description: "World of Neon front-desk booking console, Level 6, AMB Mall.",
   manifest: "/manifest.webmanifest",
 };
 

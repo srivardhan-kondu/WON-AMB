@@ -35,7 +35,7 @@ interface NavGroup {
 }
 
 /** Front-desk screens: /desk?tab=… */
-export const DESK_TABS = ["today", "walkin", "checkin", "party", "waitlist"] as const;
+export const DESK_TABS = ["walkin", "today", "checkin", "party"] as const;
 export type DeskTab = (typeof DESK_TABS)[number];
 /** Management screens: /dashboard?tab=… */
 export const DASH_TABS = ["overview", "day", "products", "yield", "memberships", "audit", "messages", "integrity"] as const;
@@ -46,11 +46,10 @@ export const NAV: NavGroup[] = [
     group: "Front desk",
     min: "desk",
     items: [
-      { href: "/desk", tab: "today", label: "Today's bookings", description: "Every booking for the day, with status, waivers and payment", icon: "calendar" },
-      { href: "/desk", tab: "walkin", label: "New booking", description: "Walk-ins and phone bookings — the best available slots, ranked for you", icon: "plus" },
-      { href: "/desk", tab: "checkin", label: "Check-in", description: "Scan the QR or type the booking code; sign waivers at the desk", icon: "qr" },
-      { href: "/desk", tab: "party", label: "Parties", description: "Birthday and corporate bookings with exclusive room blocks", icon: "gift" },
-      { href: "/desk", tab: "waitlist", label: "Waitlist", description: "Guests waiting for a sold-out hour; offers go out automatically", icon: "clock" },
+      { href: "/desk", tab: "walkin", label: "New booking", description: "Walk-in or phone booking", icon: "plus" },
+      { href: "/desk", tab: "today", label: "Today's bookings", description: "Everyone booked for the day", icon: "calendar" },
+      { href: "/desk", tab: "checkin", label: "Check-in", description: "Scan the QR or type the booking code", icon: "qr" },
+      { href: "/desk", tab: "party", label: "Parties", description: "Birthday and corporate bookings", icon: "gift" },
     ],
   },
   {
@@ -122,12 +121,12 @@ function Shell({ children, min }: { children: ReactNode; min: keyof typeof RANK 
         {/* Sidebar */}
         <div className={`fixed inset-0 z-30 bg-gray-900/30 lg:hidden ${menuOpen ? "" : "hidden"}`} onClick={() => setMenuOpen(false)} />
         <aside
-          className={`no-print fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-line bg-sidebar transition-transform lg:translate-x-0 ${menuOpen ? "translate-x-0" : "-translate-x-full"}`}
+          className={`no-print fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-line bg-sidebar transition-transform lg:translate-x-0 ${menuOpen ? "translate-x-0" : "-translate-x-full"}`}
         >
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-line px-5">
             <Link href={staff.role === "floor" ? "/runsheet" : "/desk"} className="flex items-baseline gap-2">
-              <span className="text-xl font-black tracking-tight neon-text">WON</span>
-              <span className="text-xs font-medium text-muted">Staff console</span>
+              <span className="text-2xl font-black tracking-tight neon-text">WON</span>
+              <span className="text-sm font-medium text-muted">Front desk</span>
             </Link>
             <button className="text-muted lg:hidden" onClick={() => setMenuOpen(false)} aria-label="Close menu">
               <Icon name="x" />
@@ -136,8 +135,8 @@ function Shell({ children, min }: { children: ReactNode; min: keyof typeof RANK 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5" onClick={(e) => (e.target as HTMLElement).closest("a") && setMenuOpen(false)}>
             {NAV.filter((g) => atLeast(staff, g.min)).map((g) => (
               <div key={g.group}>
-                <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted/80">{g.group}</div>
-                <div className="space-y-0.5">
+                <div className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-muted/80">{g.group}</div>
+                <div className="space-y-1">
                   {g.items.map((i) => (
                     <NavLink key={hrefOf(i)} item={i} active={active === i} />
                   ))}
@@ -152,8 +151,8 @@ function Shell({ children, min }: { children: ReactNode; min: keyof typeof RANK 
                 {staff.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{staff.name}</div>
-                <div className="truncate text-xs text-muted">{ROLE_LABEL[staff.role]}</div>
+                <div className="truncate text-base font-medium">{staff.name}</div>
+                <div className="truncate text-sm text-muted">{ROLE_LABEL[staff.role]}</div>
               </div>
               <button
                 className="rounded-md p-1.5 text-muted hover:bg-panel-2 hover:text-foreground"
@@ -171,22 +170,22 @@ function Shell({ children, min }: { children: ReactNode; min: keyof typeof RANK 
         </aside>
 
         {/* Main column */}
-        <div className="flex min-h-screen flex-col lg:pl-64">
-          <header className="no-print sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 border-b border-line bg-panel/85 px-4 backdrop-blur lg:px-8">
+        <div className="flex min-h-screen flex-col lg:pl-72">
+          <header className="no-print sticky top-0 z-20 flex h-20 shrink-0 items-center gap-3 border-b border-line bg-panel/85 px-4 backdrop-blur lg:px-8">
             <button className="-ml-1 rounded-md p-1.5 text-muted hover:bg-panel-2 lg:hidden" onClick={() => setMenuOpen(true)} aria-label="Open menu">
               <Icon name="menu" />
             </button>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-base font-semibold">{active?.label ?? "WON"}</h1>
-              <p className="hidden truncate text-xs text-muted sm:block">{active?.description}</p>
+              <h1 className="truncate text-2xl font-bold">{active?.label ?? "WON"}</h1>
+              <p className="hidden truncate text-base text-muted sm:block">{active?.description}</p>
             </div>
-            <div className="hidden text-right text-xs text-muted md:block">
+            <div className="hidden text-right text-sm text-muted md:block">
               <div className="font-medium text-foreground">{fmtDay(todayIST())}</div>
               <div>Level 6, AMB Mall</div>
             </div>
             {atLeast(staff, "desk") && !(active?.tab === "walkin") && (
-              <Link href="/desk?tab=walkin" className="btn btn-primary btn-sm">
-                <Icon name="plus" className="h-4 w-4" /> New booking
+              <Link href="/desk?tab=walkin" className="btn btn-primary">
+                <Icon name="plus" className="h-5 w-5" /> New booking
               </Link>
             )}
           </header>
@@ -212,11 +211,11 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   return (
     <Link
       href={hrefOf(item)}
-      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+      className={`flex items-center gap-3 rounded-lg px-3 py-3 text-base font-medium transition ${
         active ? "bg-pink/10 text-pink" : "text-gray-600 hover:bg-panel-2 hover:text-foreground"
       }`}
     >
-      <Icon name={item.icon} className={`h-5 w-5 ${active ? "text-pink" : "text-gray-400"}`} />
+      <Icon name={item.icon} className={`h-6 w-6 ${active ? "text-pink" : "text-gray-400"}`} />
       {item.label}
     </Link>
   );

@@ -33,7 +33,7 @@ const STATUS_LABEL: Record<string, string> = { hold: "awaiting payment", arrived
 export function StatusChip({ status }: { status: string }) {
   return (
     <span className={`chip ${STATUS_STYLE[status] ?? "border-line bg-panel-2 text-muted"}`}>
-      <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current" />
+      <span className="mr-1.5 h-2 w-2 rounded-full bg-current" />
       {STATUS_LABEL[status] ?? status.replace("_", " ")}
     </span>
   );
@@ -41,7 +41,7 @@ export function StatusChip({ status }: { status: string }) {
 
 export function ErrorNote({ error }: { error: string | null | undefined }) {
   if (!error) return null;
-  return <div className="rounded-lg border border-red/20 bg-red/5 px-3 py-2 text-sm text-red">{error}</div>;
+  return <div className="rounded-lg border border-red/20 bg-red/5 px-4 py-3 text-base font-medium text-red">{error}</div>;
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
@@ -49,19 +49,19 @@ export function Field({ label, children, hint }: { label: string; children: Reac
     <label className="block">
       <span className="label">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-muted">{hint}</span>}
+      {hint && <span className="mt-1 block text-sm text-muted">{hint}</span>}
     </label>
   );
 }
 
 export function Stepper({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (n: number) => void }) {
   return (
-    <div className="inline-flex items-center rounded-lg border border-line bg-panel shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
-      <button type="button" className="px-3 py-1.5 text-base text-muted hover:text-foreground disabled:opacity-30" disabled={value <= min} onClick={() => onChange(value - 1)} aria-label="fewer">
+    <div className="inline-flex items-center rounded-xl border border-line bg-panel shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
+      <button type="button" className="px-5 py-2.5 text-2xl font-semibold text-muted hover:text-foreground disabled:opacity-30" disabled={value <= min} onClick={() => onChange(value - 1)} aria-label="fewer">
         −
       </button>
-      <span className="w-10 text-center text-base font-semibold">{value}</span>
-      <button type="button" className="px-3 py-1.5 text-base text-muted hover:text-foreground disabled:opacity-30" disabled={value >= max} onClick={() => onChange(value + 1)} aria-label="more">
+      <span className="w-14 text-center text-2xl font-bold">{value}</span>
+      <button type="button" className="px-5 py-2.5 text-2xl font-semibold text-muted hover:text-foreground disabled:opacity-30" disabled={value >= max} onClick={() => onChange(value + 1)} aria-label="more">
         +
       </button>
     </div>

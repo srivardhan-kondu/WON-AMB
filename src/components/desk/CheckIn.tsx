@@ -109,7 +109,7 @@ export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => 
         <section className="card space-y-4">
           <div>
             <div className="card-title">Scan or type a booking code</div>
-            <p className="text-xs text-muted">Point the camera at the guest&apos;s WhatsApp QR, or type the code printed under it.</p>
+            <p className="text-sm text-muted">Point the camera at the guest&apos;s WhatsApp QR, or type the code printed under it.</p>
           </div>
           <div className="flex gap-2">
             <div className="relative flex-1">
@@ -141,7 +141,7 @@ export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => 
             </div>
             <div>
               <div className="font-semibold text-lime">Checked in · {result.party} guest{result.party === 1 ? "" : "s"}</div>
-              <div className="font-mono text-sm text-muted">{result.code}</div>
+              <div className="font-mono text-base text-muted">{result.code}</div>
             </div>
           </section>
         )}
@@ -154,7 +154,7 @@ export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => 
               </div>
               <span className="chip border-amber/20 bg-amber/10 text-amber">{missing.party - missing.signed} to sign</span>
             </div>
-            <p className="text-sm text-muted">Have the remaining guests sign on this tablet (they confirm they&apos;ve read the waiver), or check in only the signed guests — their unused seats go back on sale.</p>
+            <p className="text-base text-muted">Have the remaining guests sign on this tablet (they confirm they&apos;ve read the waiver), or check in only the signed guests — their unused seats go back on sale.</p>
             {guests.map((g, i) => (
               <div key={i} className="grid grid-cols-[1fr_auto] gap-2">
                 <input className="input" placeholder={`Guest ${missing.signed + i + 1} full name`} value={g.name} onChange={(e) => setGuests(guests.map((x, k) => (k === i ? { ...x, name: e.target.value } : x)))} />
@@ -202,21 +202,21 @@ function ArrivingNext({ onPick, refreshKey }: { onPick: (code: string) => void; 
     <aside className="card self-start p-0">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="card-title">Arriving next</div>
-        <span className="text-xs text-muted">{rows?.length ?? 0} to check in</span>
+        <span className="text-sm text-muted">{rows?.length ?? 0} to check in</span>
       </div>
       <div className="max-h-[480px] divide-y divide-line overflow-y-auto">
         {rows == null && <div className="p-6 text-center text-muted"><Spinner /></div>}
-        {rows?.length === 0 && <div className="p-6 text-center text-sm text-muted">Everyone booked for today is checked in.</div>}
+        {rows?.length === 0 && <div className="p-6 text-center text-base text-muted">Everyone booked for today is checked in.</div>}
         {rows?.map((r) => (
           <button key={r.code} className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-panel-2" onClick={() => onPick(r.code)}>
-            <div className="w-16 shrink-0 text-sm font-semibold">{fmtMin(r.start_min)}</div>
+            <div className="w-16 shrink-0 text-base font-semibold">{fmtMin(r.start_min)}</div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{r.name || "Guest"} · {r.party_size}</div>
-              <div className="truncate text-xs text-muted">
+              <div className="truncate text-base font-medium">{r.name || "Guest"} · {r.party_size}</div>
+              <div className="truncate text-sm text-muted">
                 <span className="font-mono">{r.code}</span> · {r.product}
               </div>
             </div>
-            <span className={`text-xs font-medium ${r.waivers >= r.party_size ? "text-lime" : "text-amber"}`}>{Math.min(r.waivers, r.party_size)}/{r.party_size}</span>
+            <span className={`text-sm font-medium ${r.waivers >= r.party_size ? "text-lime" : "text-amber"}`}>{Math.min(r.waivers, r.party_size)}/{r.party_size}</span>
           </button>
         ))}
       </div>

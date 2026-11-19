@@ -77,10 +77,10 @@ export function PartyDesk({ products }: { products: Product[] }) {
         <div className="text-2xl font-semibold tracking-tight">{done.code}</div>
         {done.status === "hold" ? (
           <>
-            <div className="text-sm">
+            <div className="text-base">
               Zone held for 2 h. Send this deposit link ({rupees(done.amountDuePaise)}):
             </div>
-            <div className="break-all rounded-lg bg-panel-2 p-2 text-xs">{link}</div>
+            <div className="break-all rounded-lg bg-panel-2 p-2 text-sm">{link}</div>
             <button className="btn" onClick={() => navigator.clipboard.writeText(link)}>
               Copy link
             </button>
@@ -112,12 +112,12 @@ export function PartyDesk({ products }: { products: Product[] }) {
           </Field>
         </div>
         {offers == null ? <Spinner /> : <OfferPicker offers={offers} picked={picked?.start ?? null} onPick={setPicked} />}
-        {offers?.length === 0 && <div className="text-sm text-muted">No exclusive block free that day.</div>}
+        {offers?.length === 0 && <div className="text-base text-muted">No exclusive block free that day.</div>}
       </div>
       <div className="card space-y-3 self-start">
         <input className="input" placeholder="Host name" value={name} onChange={(e) => setName(e.target.value)} />
         <input className="input" placeholder="Host mobile" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-base">
           <input type="checkbox" checked={food} onChange={(e) => setFood(e.target.checked)} /> Food add-on (flags vendor timeline on runsheet)
         </label>
         <textarea className="input" rows={2} placeholder="Notes (cake, theme…)" value={notes} onChange={(e) => setNotes(e.target.value)} />
@@ -128,19 +128,19 @@ export function PartyDesk({ products }: { products: Product[] }) {
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-xs text-amber">
+        <label className="flex items-center gap-2 text-sm text-amber">
           <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} /> Override 48 h notice rule (manager PIN, audited)
         </label>
         {override && <input className="input font-mono" type="password" inputMode="numeric" autoComplete="off" placeholder="Manager PIN" value={pin} onChange={(e) => setPin(e.target.value)} />}
         {picked && product && (
-          <div className="rounded-lg bg-panel-2 p-2 text-sm">
+          <div className="rounded-lg bg-panel-2 p-2 text-base">
             <div className="flex justify-between">
               <span>
                 {party} × {rupees(product.pricePaise)} @ {fmtMin(picked.start)}
               </span>
               <b className="tabular-nums">{rupees(picked.pricePaise)}</b>
             </div>
-            <div className="text-xs text-muted">Deposit 25%: {rupees(Math.round(picked.pricePaise * 0.25))} · setup 30 min before, teardown 15 after</div>
+            <div className="text-sm text-muted">Deposit 25%: {rupees(Math.round(picked.pricePaise * 0.25))} · setup 30 min before, teardown 15 after</div>
           </div>
         )}
         <ErrorNote error={err} />

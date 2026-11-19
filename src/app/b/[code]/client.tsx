@@ -96,14 +96,6 @@ export default function BookingPage() {
               Invoice {b.invoice}
             </Link>
           )}
-          {b.canReschedule && (
-            <Link className="btn" href={`/b/${b.code}/reschedule?t=${token}`}>
-              Reschedule (1 free)
-            </Link>
-          )}
-          <Link className="btn" href="/me">
-            My memberships
-          </Link>
           <a className="btn" href="https://maps.google.com/?q=AMB+Mall" target="_blank" rel="noreferrer">
             Directions
           </a>
