@@ -33,7 +33,8 @@ const addDays = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x
 const tomorrow = addDays(today, 1);
 // find next Tuesday-ish weekday (off-peak) for clean capacity tests
 let wk = addDays(today, 2);
-while ([0, 5, 6].includes(new Date(wk + "T00:00:00Z").getUTCDay())) wk = addDays(wk, 1);
+// Off-peak weekday, and never the party-test day (today + 4): its exclusive hold would fill the rooms.
+while ([0, 5, 6].includes(new Date(wk + "T00:00:00Z").getUTCDay()) || wk === addDays(today, 4)) wk = addDays(wk, 1);
 
 console.log("1. Catalogue & quote");
 const prods = await call("/api/products");
@@ -273,12 +274,15 @@ ok(health.status === 200 && health.j.ok, `health: ledger invariant holds over ${
 
 
 console.log("18. Guest list edits until check-in");
+// Section 11 may or may not have moved this booking (its 24 h rule depends on the time of day), so
+// compare against where it is now rather than a fixed time.
+const gBefore = await call(`/api/bookings/${hold.j.code}?t=${hold.j.token}`);
 const g1 = await call(`/api/bookings/${hold.j.code}/guests?t=${hold.j.token}`, { method: "PUT", body: { guests: [{ name: "Asha Rao", ageBand: "18+" }, { name: "Kiran" }] } });
 ok(g1.status === 200 && g1.j.guests.length === 2, "leader saves 2 guest names");
 const g2 = await call(`/api/bookings/${hold.j.code}/guests?t=${hold.j.token}`, { method: "PUT", body: { guests: Array.from({ length: 5 }, (_, i) => ({ name: `G${i}` })) } });
 ok(g2.status === 400, "more names than the party size refused");
 const gv = await call(`/api/bookings/${hold.j.code}?t=${hold.j.token}`);
-ok(gv.j.guests?.length === 2 && gv.j.canEditGuests && gv.j.start === 18 * 60, "guest list shown, schedule untouched");
+ok(gv.j.guests?.length === 2 && gv.j.canEditGuests && gv.j.start === gBefore.j.start && gv.j.day === gBefore.j.day, "guest list shown, schedule untouched");
 const g3 = await call(`/api/bookings/${hold.j.code}/guests?t=wrongtoken000000`, { method: "PUT", body: { guests: [] } });
 ok(g3.status === 403, "guest edit needs the booking token");
 

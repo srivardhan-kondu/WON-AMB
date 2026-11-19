@@ -9,12 +9,17 @@ import { OfferPicker, type DeskOffer } from "./OfferPicker";
 
 type Pay = "cash" | "upi_counter" | "online" | "membership" | "comp";
 
+/** Clock times offered in the time picker (20-min grid; the engine still ranks real availability around it). */
+const TIME_CHOICES = Array.from({ length: (23 - 9) * 3 }, (_, i) => 9 * 60 + i * 20);
+
 /** Walk-in: product + party → same top-5 offers → counter payment → ticket. Two taps for the common case. */
-export function WalkIn({ products, rooms }: { products: Product[]; rooms: Room[] }) {
+export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; rooms: Room[]; onCheckIn?: (code: string) => void }) {
   const sellable = products.filter((p) => p.shape !== "party" && p.active);
   const [productId, setProductId] = useState("c3");
   const [party, setParty] = useState(2);
   const [day, setDay] = useState(todayIST());
+  /** Preferred start in minutes, or null: "next available" today / "any time" on other days. */
+  const [time, setTime] = useState<number | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
   const [offers, setOffers] = useState<DeskOffer[] | null>(null);
   const [quoteErr, setQuoteErr] = useState<string | null>(null);
@@ -44,12 +49,13 @@ export function WalkIn({ products, rooms }: { products: Product[]; rooms: Room[]
     setPicked(null);
     setQuoteErr(null);
     api<{ offers: DeskOffer[]; error: string | null }>("/api/quote", {
-      body: { product: product.id, party, date: day, channel: "desk", chosenRooms: chosen.length ? chosen : null },
+      body: { product: product.id, party, date: day, channel: "desk", preferredMin: time, chosenRooms: chosen.length ? chosen : null },
     })
       .then((d) => {
         if (!live) return;
-        // Walk-ins: soonest first — the queue is forming.
-        const sorted = day === todayIST() ? [...d.offers].sort((a, b) => a.start - b.start) : d.offers;
+        // "Next available" today: the server ranks around now; show them in clock order.
+        // A specific time: keep the server's order (closest to the asked-for time first).
+        const sorted = day === todayIST() && time == null ? [...d.offers].sort((a, b) => a.start - b.start) : d.offers;
         setOffers(sorted);
         setQuoteErr(d.error);
         if (sorted[0]) setPicked(sorted[0]);
@@ -58,7 +64,7 @@ export function WalkIn({ products, rooms }: { products: Product[]; rooms: Room[]
     return () => {
       live = false;
     };
-  }, [product, party, day, chosen]);
+  }, [product, party, day, time, chosen]);
 
   useEffect(() => {
     setMembership(null);
@@ -95,11 +101,16 @@ export function WalkIn({ products, rooms }: { products: Product[]; rooms: Room[]
         <div className="text-sm text-muted">{ticket.status === "hold" ? "Payment link created" : "Booked ✓ — WhatsApp ticket sent"}</div>
         <div className="font-mono text-3xl font-bold">{ticket.code}</div>
         <div className="break-all rounded-lg bg-panel-2 p-2 text-xs">{url}</div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {ticket.status !== "hold" && day === todayIST() && onCheckIn && (
+            <button className="btn btn-cyan" onClick={() => onCheckIn(ticket.code)}>
+              Waivers & check in now
+            </button>
+          )}
           <a className="btn" href={url} target="_blank" rel="noreferrer">
             Open ticket
           </a>
-          <button className="btn btn-primary" onClick={() => { setTicket(null); setName(""); setPhone(""); setChosen([]); }}>
+          <button className="btn btn-primary" onClick={() => { setTicket(null); setName(""); setPhone(""); setChosen([]); setTime(null); }}>
             Next guest
           </button>
         </div>
@@ -123,6 +134,16 @@ export function WalkIn({ products, rooms }: { products: Product[]; rooms: Room[]
           </Field>
           <Field label="Date">
             <input type="date" className="input" value={day} min={todayIST()} onChange={(e) => setDay(e.target.value)} />
+          </Field>
+          <Field label="Time">
+            <select className="input" value={time ?? ""} onChange={(e) => setTime(e.target.value === "" ? null : Number(e.target.value))}>
+              <option value="">{day === todayIST() ? "Next available" : "Any time"}</option>
+              {TIME_CHOICES.map((m) => (
+                <option key={m} value={m}>
+                  {fmtMin(m)}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
         {product?.shape === "grid20" && (

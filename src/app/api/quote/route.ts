@@ -3,6 +3,8 @@ import { quoteDay, upsellsFor } from "@/lib/bookings";
 import { getStaff } from "@/lib/auth";
 import { body, handle, json, rateLimit } from "@/lib/http";
 import { roomNames } from "@/lib/access";
+import { nowIST } from "@/lib/time";
+import { getDayConfig } from "@/lib/repo";
 
 const Q = z.object({
   product: z.string(),
@@ -18,7 +20,12 @@ export const POST = handle(async (req: Request) => {
   rateLimit(req, "quote", 60);
   const q = await body(req, Q);
   const channel = q.channel === "desk" && (await getStaff()) ? "desk" : "online";
-  const { product, result } = await quoteDay({ day: q.date, productId: q.product, party: q.party, preferredMin: q.preferredMin, chosenRooms: q.chosenRooms, channel, logRejection: true });
+  // §5: "a walk-in is just a quote with window = now". At the desk, today, with no time asked for,
+  // rank the soonest feasible starts first — the guest is standing at the counter.
+  const { day: today, min: nowMin } = nowIST();
+  // Before opening (phone bookings at 10:30), "now" means the first slot of the day.
+  const preferredMin = q.preferredMin ?? (channel === "desk" && q.date === today ? Math.max(nowMin, (await getDayConfig(today)).openMin) : null);
+  const { product, result } = await quoteDay({ day: q.date, productId: q.product, party: q.party, preferredMin, chosenRooms: q.chosenRooms, channel, logRejection: true });
   const names = await roomNames();
   const offers = result.offers.map((o) => ({ ...o, legs: o.legs.map((l) => ({ ...l, room: names.get(l.roomId) ?? l.roomId })) }));
   const upsells = offers[0] ? await upsellsFor(q.date, product, q.party, offers[0].start, channel) : [];

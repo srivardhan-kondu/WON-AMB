@@ -42,7 +42,7 @@ function Desk() {
         ))}
       </div>
       {tab === "Today" && <TodayBoard onCheckIn={(c) => { setCheckinCode(c); setTab("Check-in"); }} />}
-      {tab === "Walk-in" && <WalkIn products={products} rooms={rooms} />}
+      {tab === "Walk-in" && <WalkIn products={products} rooms={rooms} onCheckIn={(c) => { setCheckinCode(c); setTab("Check-in"); }} />}
       {tab === "Check-in" && <CheckIn initial={checkinCode} />}
       {tab === "Party" && <PartyDesk products={products} />}
       {tab === "Waitlist" && <Waitlist products={products} />}
