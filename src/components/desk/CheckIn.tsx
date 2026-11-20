@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "@/lib/client";
-import { AGE_BANDS, type AgeBand } from "@/lib/waiver";
 import { ErrorNote, Spinner } from "@/components/ui";
+import { WAIVER_TEXT } from "@/lib/waiver";
 import { Icon } from "@/components/icons";
 import { fmtMin, todayIST } from "@/lib/time";
 
@@ -16,14 +16,14 @@ declare global {
   }
 }
 
-/** Scan QR or type the WON-code → waiver status → arrive. Unsigned guests sign right here on the desk tablet. */
+/** Scan QR or type the WON-code → waiver status → arrive. The lead guest accepts the waiver for the whole group on the desk tablet. */
 export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => void }) {
   const [scan, setScan] = useState(initial ?? "");
   const [result, setResult] = useState<{ code: string; party: number } | null>(null);
-  const [missing, setMissing] = useState<{ code: string; signed: number; party: number } | null>(null);
+  const [missing, setMissing] = useState<{ code: string; signed: number; party: number; lead: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [camera, setCamera] = useState(false);
-  const [guests, setGuests] = useState<{ name: string; ageBand: AgeBand }[]>([]);
+  const [accepted, setAccepted] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -46,19 +46,16 @@ export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => 
     } catch (e) {
       if (e instanceof ApiError && e.data.needWaivers) {
         const code = value.match(/WON-[A-Z0-9]{4}/i)?.[0].toUpperCase() ?? value;
-        const m = { code, signed: Number(e.data.signed), party: Number(e.data.party) };
-        setMissing(m);
-        setGuests(Array.from({ length: m.party - m.signed }, () => ({ name: "", ageBand: "18+" as AgeBand })));
+        setMissing({ code, signed: Number(e.data.signed), party: Number(e.data.party), lead: String(e.data.lead ?? "") });
+        setAccepted(false);
       } else setErr((e as Error).message);
     }
   }
 
   async function signOnDesk() {
-    if (!missing) return;
-    const filled = guests.filter((g) => g.name.trim().length >= 2);
-    if (!filled.length) return;
+    if (!missing || !accepted) return;
     try {
-      await api(`/api/waivers/${missing.code}`, { body: { guests: filled.map((g) => ({ ...g, accept: true })) } });
+      await api(`/api/waivers/${missing.code}`, { body: { group: true } });
       await submit(missing.code);
     } catch (e) {
       setErr((e as Error).message);
@@ -154,20 +151,26 @@ export function CheckIn({ initial, onDone }: { initial?: string; onDone?: () => 
               </div>
               <span className="chip border-amber/20 bg-amber/10 text-amber">{missing.party - missing.signed} to sign</span>
             </div>
-            <p className="text-base text-muted">Have the remaining guests sign on this tablet (they confirm they&apos;ve read the waiver), or check in only the signed guests — their unused seats go back on sale.</p>
-            {guests.map((g, i) => (
-              <div key={i} className="grid grid-cols-[1fr_auto] gap-2">
-                <input className="input" placeholder={`Guest ${missing.signed + i + 1} full name`} value={g.name} onChange={(e) => setGuests(guests.map((x, k) => (k === i ? { ...x, name: e.target.value } : x)))} />
-                <select className="input w-auto" value={g.ageBand} onChange={(e) => setGuests(guests.map((x, k) => (k === i ? { ...x, ageBand: e.target.value as AgeBand } : x)))}>
-                  {AGE_BANDS.map((a) => (
-                    <option key={a}>{a}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            <p className="text-base text-muted">
+              Read the waiver to {missing.lead || "the lead guest"}. They accept it once for the whole group of {missing.party}. No individual names needed.
+            </p>
+            <details className="rounded-lg border border-line bg-panel-2 px-4 py-3 text-sm">
+              <summary className="cursor-pointer font-medium">Waiver text</summary>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
+                {WAIVER_TEXT.map((t) => (
+                  <li key={t}>{t}</li>
+                ))}
+              </ul>
+            </details>
+            <label className="flex items-start gap-3 text-base">
+              <input type="checkbox" className="mt-1 h-5 w-5" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
+              <span>
+                {missing.lead || "The lead guest"} has read and accepts the waiver for all {missing.party} guests, including as guardian for any under-10s.
+              </span>
+            </label>
             <div className="flex flex-wrap gap-2">
-              <button className="btn btn-cyan" onClick={signOnDesk}>
-                Guests accept waiver & check in
+              <button className="btn btn-cyan" disabled={!accepted} onClick={signOnDesk}>
+                Accept for group & check in {missing.party}
               </button>
               {missing.signed > 0 && (
                 <button className="btn" onClick={() => submit(missing.code, missing.signed)}>

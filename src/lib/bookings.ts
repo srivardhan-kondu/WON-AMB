@@ -172,6 +172,9 @@ export interface HoldInput {
   chosenRooms?: string[] | null;
   name: string;
   phone: string;
+  /** Lead guest's age and gender (desk bookings). */
+  age?: number | null;
+  gender?: string | null;
   source: Source;
   payment: PaymentMode;
   idemKey?: string | null;
@@ -221,7 +224,7 @@ export async function createHold(input: HoldInput): Promise<HoldResult> {
     await checkMemberHorizon(input.day, input.start);
   }
 
-  const customerId = await upsertCustomer(input.phone, input.name);
+  const customerId = await upsertCustomer(input.phone, input.name, { age: input.age, gender: input.gender });
   const isOnlinePay = input.payment === "online";
   const ttl = product.shape === "party" ? PARTY_HOLD_TTL_MS : HOLD_TTL_MS;
 
@@ -501,7 +504,7 @@ export async function checkIn(scan: string, actor: string, opts: { shrinkTo?: nu
   const signed = await waiverCount(b.id);
   let party = b.party_size;
   if (signed < party) {
-    if (!opts.shrinkTo) throw new HttpError(409, "Waivers missing", { needWaivers: true, signed, party });
+    if (!opts.shrinkTo) throw new HttpError(409, "Waivers missing", { needWaivers: true, signed, party, lead: (await customerOf(b))?.name ?? "" });
     if (opts.shrinkTo < 1 || opts.shrinkTo > signed) throw new HttpError(400, `Can check in at most ${signed} guest(s) with signed waivers`);
     party = opts.shrinkTo;
   }
@@ -663,6 +666,33 @@ export async function signWaivers(code: string, guests: { name: string; ageBand:
   await audit(via === "desk" ? "desk" : "customer", "waivers_signed", b.code, { count: guests.length });
   emitChange(b.day);
   return { signed: already + guests.length, party: b.party_size };
+}
+
+/**
+ * Desk check-in for a group: the lead guest accepts the waiver once on behalf of everyone still unsigned,
+ * so the desk doesn't type each guest's name. One record per seat keeps the waiver count = party size.
+ */
+export async function signGroupWaiver(code: string, ip: string) {
+  const d = db();
+  const b = await getBookingByCode(code);
+  if (!b) throw new HttpError(404, "Booking not found");
+  if (!["hold", "confirmed", "arrived"].includes(b.status)) throw new HttpError(409, `Booking is ${b.status}`);
+  const lead = (await customerOf(b))?.name?.trim() || "Lead guest";
+  const ins = d.prepare("INSERT INTO waivers (booking_id, customer_id, guest_name, age_band, signed_at, ip, signed_via) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  const added = await tx(async () => {
+    const n = await waiverCount(b.id);
+    const need = b.party_size - n;
+    for (let i = 0; i < need; i++) {
+      const k = n + i + 1;
+      await ins.run(b.id, b.customer_id, k === 1 ? lead : `Guest ${k} (accepted by ${lead})`, "group", Date.now(), ip, "desk");
+    }
+    return need;
+  });
+  if (added > 0) {
+    await audit("desk", "group_waiver_signed", b.code, { count: added, lead });
+    emitChange(b.day);
+  }
+  return { signed: b.party_size, party: b.party_size };
 }
 
 // ---------------------------------------------------------------------------------------------

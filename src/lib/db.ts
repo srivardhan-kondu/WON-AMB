@@ -17,7 +17,7 @@ import { DEFAULT_PRODUCTS, DEFAULT_ROOMS } from "./engine";
 pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
 pg.types.setTypeParser(pg.types.builtins.NUMERIC, (v) => Number(v));
 
-const SCHEMA_VERSION = "1";
+const SCHEMA_VERSION = "2";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS rooms (
@@ -147,6 +147,9 @@ CREATE TABLE IF NOT EXISTS quote_rejections (               -- feeds the false s
   channel TEXT NOT NULL, false_sellout BIGINT NOT NULL DEFAULT 0, at BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS rejections_at ON quote_rejections(at);
+-- v2: lead-guest age + gender, captured at the desk
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS age BIGINT;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS gender TEXT;
 `;
 
 // ---------------------------------------------------------------------------------------------

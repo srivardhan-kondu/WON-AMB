@@ -191,13 +191,16 @@ export async function audit(actor: string, action: string, entity: string, detai
 }
 
 /** Find-or-create by phone in one statement (safe when two requests for a new number race). */
-export async function upsertCustomer(phone: string, name?: string): Promise<number> {
+export async function upsertCustomer(phone: string, name?: string, profile: { age?: number | null; gender?: string | null } = {}): Promise<number> {
   const r = await db()
     .prepare(
-      `INSERT INTO customers (phone, name, created_at) VALUES (?, ?, ?)
-       ON CONFLICT (phone) DO UPDATE SET name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE customers.name END
+      `INSERT INTO customers (phone, name, age, gender, created_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (phone) DO UPDATE SET
+         name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE customers.name END,
+         age = COALESCE(EXCLUDED.age, customers.age),
+         gender = COALESCE(EXCLUDED.gender, customers.gender)
        RETURNING id`,
     )
-    .get<{ id: number }>(phone, name ?? "", Date.now());
+    .get<{ id: number }>(phone, name ?? "", profile.age ?? null, profile.gender ?? null, Date.now());
   return r!.id;
 }

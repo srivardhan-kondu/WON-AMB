@@ -7,11 +7,14 @@ import { addDays, fmtMin, rupees, todayIST } from "@/lib/time";
 import { ErrorNote, Spinner, Stepper } from "@/components/ui";
 import { OfferPicker, type DeskOffer } from "./OfferPicker";
 import { Icon } from "@/components/icons";
+import { AGE_MAX, AGE_MIN, GENDERS, GENDER_LABEL, type Gender } from "@/lib/profile";
 
 type Pay = "upi_counter" | "cash" | "online" | "membership" | "comp";
 
 interface Guest {
   name: string | null;
+  age: number | null;
+  gender: Gender | null;
   visits: number;
   membership: { plan: string; visits_left: number | null; valid_till: string } | null;
 }
@@ -23,7 +26,7 @@ const digits = (s: string) => s.replace(/\D/g, "");
 
 /**
  * New booking at the desk, top to bottom:
- * 1 mobile + name (returning guests fill in automatically) → 2 experience → 3 guests & day → 4 time → 5 payment → Confirm.
+ * 1 mobile + name, age, gender (returning guests fill in automatically) → 2 experience → 3 guests & day → 4 time → 5 payment → Confirm.
  */
 export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; rooms: Room[]; onCheckIn?: (code: string) => void }) {
   const sellable = products.filter((p) => p.shape !== "party" && p.active);
@@ -32,6 +35,8 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
 
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState<Gender | null>(null);
   const [guest, setGuest] = useState<Guest | null>(null);
   const [productId, setProductId] = useState("c3");
   const [pickGames, setPickGames] = useState(false);
@@ -52,6 +57,8 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
   const [idem, setIdem] = useState(newIdem());
   const product = sellable.find((p) => p.id === productId);
   const phoneOk = digits(phone).length >= 10;
+  const ageNum = Number(age);
+  const ageOk = Number.isInteger(ageNum) && ageNum >= AGE_MIN && ageNum <= AGE_MAX;
   /** "Membership" only applies while the typed number belongs to a member. */
   const pay: Pay = payChoice === "membership" && !guest?.membership ? "upi_counter" : payChoice;
 
@@ -70,6 +77,8 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
         if (!live) return;
         setGuest(g);
         if (g.name) setName((n) => (n.trim() ? n : g.name!));
+        if (g.age) setAge((a) => (a ? a : String(g.age)));
+        if (g.gender) setGender((x) => x ?? g.gender);
       })
       .catch(() => {});
     return () => {
@@ -108,7 +117,7 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
     try {
       const r = await api<{ code: string; token: string; status: string }>("/api/desk/walkin", {
         body: {
-          date: day, product: product.id, party, start: picked.start, chosenRooms: chosen.length ? chosen : null, name: name.trim(), phone,
+          date: day, product: product.id, party, start: picked.start, chosenRooms: chosen.length ? chosen : null, name: name.trim(), phone, age: Number(age), gender,
           payment: pay, source: day === today ? "desk" : "phone", reason: pay === "comp" ? reason : undefined, managerPin: pay === "comp" ? pin : undefined,
         },
         idem,
@@ -128,6 +137,8 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
     setTicket(null);
     setPhone("");
     setName("");
+    setAge("");
+    setGender(null);
     setGuest(null);
     setChosen([]);
     setPickGames(false);
@@ -183,7 +194,11 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
     ? "Enter the mobile number"
     : !name.trim()
       ? "Enter the guest's name"
-      : !picked
+      : !ageOk
+        ? "Enter the guest's age"
+        : !gender
+          ? "Select gender"
+          : !picked
         ? "Pick a time"
         : pay === "comp" && (reason.trim().length < 3 || pin.length < 4)
           ? "Enter reason and manager PIN"
@@ -213,6 +228,30 @@ export function WalkIn({ products, rooms, onCheckIn }: { products: Product[]; ro
             <span className="label">Name</span>
             <input className="input input-lg" placeholder="Guest name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
           </label>
+        </div>
+        <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+          <label className="block">
+            <span className="label">Age</span>
+            <input
+              className="input input-lg"
+              placeholder="e.g. 28"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={3}
+              value={age}
+              onChange={(e) => setAge(digits(e.target.value))}
+            />
+          </label>
+          <div>
+            <span className="label">Gender</span>
+            <div className="grid grid-cols-3 gap-2">
+              {GENDERS.map((g) => (
+                <button key={g} type="button" className={`btn py-3 text-lg ${gender === g ? "border-2 border-pink bg-pink/5 text-pink" : ""}`} onClick={() => setGender(g)}>
+                  {GENDER_LABEL[g]}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         {guest && (guest.name || guest.membership) && (
           <div className="flex flex-wrap gap-2 text-base">

@@ -16,7 +16,7 @@ export const GET = handle(async (req: NextRequest) => {
   const rows = await db()
     .prepare(
       `SELECT b.code, b.product_id, b.start_min, b.end_min, b.party_size, b.status, b.source, b.price_paise, b.paid_paise, b.payment_method,
-              b.hold_expires, b.food, b.notes, b.reschedule_count, c.name, c.phone,
+              b.hold_expires, b.food, b.notes, b.reschedule_count, c.name, c.phone, c.age, c.gender,
               (SELECT COUNT(*) FROM waivers w WHERE w.booking_id = b.id) AS waivers,
               (SELECT string_agg(r.name, ' → ' ORDER BY l.leg_no) FROM booking_legs l JOIN rooms r ON r.id = l.room_id WHERE l.booking_id = b.id) AS rooms
        FROM bookings b LEFT JOIN customers c ON c.id = b.customer_id

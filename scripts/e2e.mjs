@@ -145,6 +145,21 @@ const ci2 = await call("/api/checkin", { cookie: desk, body: { scan: walk.j.code
 ok(ci2.status === 200 && ci2.j.party === 2, "checked in 2 signed guests; party shrunk, seat released");
 ok((await call("/api/checkin", { cookie: desk, body: { scan: walk.j.code } })).status === 409, "double check-in rejected");
 
+console.log("8b. Lead-guest age/gender + group waiver at check-in");
+const gq = await call("/api/quote", { cookie: desk, body: { product: "c3", party: 4, date: today, channel: "desk" } });
+const grp = await call("/api/desk/walkin", { cookie: desk, body: { date: today, product: "c3", party: 4, start: gq.j.offers[0].start, name: "Group Lead", phone: "9555555570", age: 34, gender: "female", payment: "cash" } });
+ok(grp.status === 201, `group walk-in with age + gender ${grp.j.code}`);
+ok((await call("/api/desk/walkin", { cookie: desk, body: { date: today, product: "c3", party: 1, start: gq.j.offers[0].start, name: "X", phone: "9555555571", age: 0, gender: "female", payment: "cash" } })).status === 400, "age out of range rejected");
+const gp = await call("/api/desk/guest?phone=9555555570", { cookie: desk });
+ok(gp.j.age === 34 && gp.j.gender === "female", "returning-guest lookup returns age + gender");
+const gci = await call("/api/checkin", { cookie: desk, body: { scan: grp.j.code } });
+ok(gci.status === 409 && gci.j.needWaivers && gci.j.lead === "Group Lead", "check-in asks for the waiver, names the lead");
+ok((await call(`/api/waivers/${grp.j.code}`, { body: { t: grp.j.token, group: true } })).status === 403, "group waiver is desk-only");
+const gw = await call(`/api/waivers/${grp.j.code}`, { cookie: desk, body: { group: true } });
+ok(gw.status === 200 && gw.j.signed === 4, "lead accepts waiver for all 4 — no names typed");
+const gci2 = await call("/api/checkin", { cookie: desk, body: { scan: grp.j.code } });
+ok(gci2.status === 200 && gci2.j.party === 4, "whole group of 4 checked in");
+
 console.log("9. Party booking (desk) with exclusive block");
 const pq = await call("/api/quote", { cookie: desk, body: { product: "party_games", party: 12, date: addDays(today, 4), channel: "desk", preferredMin: 15 * 60 } });
 ok(pq.j.offers.length > 0 && pq.j.offers[0].legs.length === 5, "party quote takes all 5 game rooms");

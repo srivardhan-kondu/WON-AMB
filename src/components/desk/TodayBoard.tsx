@@ -6,6 +6,7 @@ import { PinDialog } from "@/components/PinDialog";
 import { Icon } from "@/components/icons";
 import { api } from "@/lib/client";
 import { fmtMin, rupees, todayIST } from "@/lib/time";
+import { GENDER_LABEL, type Gender } from "@/lib/profile";
 
 export interface BoardRow {
   code: string;
@@ -22,6 +23,8 @@ export interface BoardRow {
   food: number;
   notes: string;
   name: string | null;
+  age: number | null;
+  gender: string | null;
   phone: string | null;
   waivers: number;
   rooms: string | null;
@@ -135,7 +138,14 @@ export function TodayBoard({ onCheckIn }: { onCheckIn: (code: string) => void })
                   <div className="text-sm text-muted">to {fmtMin(r.end_min)}</div>
                 </td>
                 <td>
-                  <div className="font-medium">{r.name || "—"}</div>
+                  <div className="font-medium">
+                    {r.name || "—"}
+                    {(r.age || r.gender) && (
+                      <span className="ml-2 text-sm font-normal text-muted">
+                        {[r.gender && GENDER_LABEL[r.gender as Gender], r.age].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </div>
                   <div className="whitespace-nowrap text-sm text-muted">
                     <span className="font-mono">{r.code}</span> · {r.phone?.replace(/^\+91/, "")}
                   </div>
