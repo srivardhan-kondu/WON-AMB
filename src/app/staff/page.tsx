@@ -14,12 +14,20 @@ export default function StaffLogin() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function login(e: React.FormEvent) {
+  async function login(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // Read the fields from the form itself: browser autofill can fill them without firing onChange.
+    const f = new FormData(e.currentTarget);
+    const em = String(f.get("email") ?? email).trim();
+    const pw = String(f.get("password") ?? password);
+    setEmail(em);
+    setPassword(pw);
+    if (!em || !pw) return setErr("Enter your email and password");
+    if (needTotp && totp.trim().length !== 6) return setErr("Enter the 6-digit code from your authenticator app");
     setBusy(true);
     setErr(null);
     try {
-      const r = await api<{ role: string }>("/api/staff/login", { body: { email, password, totp: needTotp ? totp : undefined } });
+      const r = await api<{ role: string }>("/api/staff/login", { body: { email: em, password: pw, totp: needTotp ? totp.trim() : undefined } });
       const next = new URLSearchParams(window.location.search).get("next");
       router.replace(next && next.startsWith("/") ? next : r.role === "floor" ? "/runsheet" : r.role === "owner" || r.role === "manager" ? "/dashboard" : "/desk");
     } catch (x) {
@@ -42,10 +50,10 @@ export default function StaffLogin() {
       </div>
       <form className="card space-y-4 p-6" onSubmit={login}>
         <Field label="Email">
-          <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="input" type="email" name="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
         <Field label="Password">
-          <input className="input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input className="input" type="password" name="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         {needTotp && (
           <Field label="Authenticator code">
@@ -53,8 +61,8 @@ export default function StaffLogin() {
           </Field>
         )}
         <ErrorNote error={err} />
-        <button className="btn btn-primary w-full py-2.5" disabled={busy || !email || !password || (needTotp && totp.length !== 6)}>
-          Log in
+        <button className="btn btn-primary w-full py-2.5" disabled={busy}>
+          {busy ? "Logging in…" : "Log in"}
         </button>
       </form>
     </main>
