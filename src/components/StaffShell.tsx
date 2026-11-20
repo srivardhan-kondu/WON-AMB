@@ -58,6 +58,11 @@ export const NAV: NavGroup[] = [
     items: [{ href: "/runsheet", label: "Runsheet", description: "Live room-by-room schedule for the floor team", icon: "squares" }],
   },
   {
+    group: "Owner",
+    min: "owner",
+    items: [{ href: "/insights", label: "Business insights", description: "Growth, customers, demand and what to do next", icon: "bulb" }],
+  },
+  {
     group: "Management",
     min: "manager",
     items: [
@@ -183,6 +188,11 @@ function Shell({ children, min }: { children: ReactNode; min: keyof typeof RANK 
               <div className="font-medium text-foreground">{fmtDay(todayIST())}</div>
               <div>Level 6, AMB Mall</div>
             </div>
+            {staff.role === "owner" && !path.startsWith("/insights") && (
+              <Link href="/insights" className="btn">
+                <Icon name="bulb" className="h-5 w-5 text-pink" /> <span className="hidden sm:inline">Business insights</span>
+              </Link>
+            )}
             {atLeast(staff, "desk") && !(active?.tab === "walkin") && (
               <Link href="/desk?tab=walkin" className="btn btn-primary">
                 <Icon name="plus" className="h-5 w-5" /> New booking
